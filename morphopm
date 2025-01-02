@@ -455,7 +455,9 @@ class MorphoPackageManager {
 
   main(args) { // Parses commands
     if (args.count()>0) {
-      if (args[0]=="install") {
+      if (args[0]=="help") {
+        self.help()
+      } else if (args[0]=="install") {
         self._multi(self.install, args) 
       } else if (args[0]=="uninstall") {
         self._multi(self.uninstall, args) 
