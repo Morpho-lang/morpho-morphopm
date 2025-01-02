@@ -1,6 +1,6 @@
 {
     "name" : "zeromq",
-    "version" : "0.0.1",
+    "version" : "0.1.0",
     "git" : "https://github.com/morpho-lang/morpho-zeromq",
     "url" : "https://github.com/Morpho-lang/morpho-zeromq/archive/refs/heads/main.zip",
     "build" : "cmake",

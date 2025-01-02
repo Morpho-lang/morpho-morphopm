@@ -1,6 +1,6 @@
 {
     "name" : "gmsh",
-    "version" : "0.0.1",
+    "version" : "0.1.0",
     "git" : "https://github.com/Morpho-lang/morpho-gmsh",
     "url" : "https://github.com/Morpho-lang/morpho-gmsh/archive/refs/heads/main.zip",
     "build" : "cmake",

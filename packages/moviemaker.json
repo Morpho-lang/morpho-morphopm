@@ -1,6 +1,6 @@
 {
     "name" : "moviemaker",
-    "version" : "0.0.1",
+    "version" : "1.0.0",
     "git" : "https://github.com/morpho-lang/morpho-moviemaker",
     "url" : "https://github.com/Morpho-lang/morpho-moviemaker/archive/refs/heads/main.zip"
 }
