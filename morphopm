@@ -36,6 +36,10 @@ var packageFolder = "${homeFolder}/morpho" // Where packages are installed
 var environmentFile = "${homeFolder}/.morphopackages" // The default environment is stored in ~/.morphopackages
 var configFile = "${homeFolder}/.morphopmconfig.json" // JSON file with installed packages
 
+var defnsFolderLocations = ( "/home/linuxbrew/.linuxbrew/share/morphopm", 
+                             "/opt/homebrew/share/morphopm", 
+                             "/usr/local/share/morphopm" )
+
 /* -------------------
  * Utility functions
  * ------------------- */
@@ -198,10 +202,18 @@ class MorphoConfig {
     return nil 
   }
 
+  _finddefinitions() {
+    for (f in defnsFolderLocations) {
+      if (Folder.isfolder(f)) return f 
+    }
+  }
+
   packageDefns() {
-    if (self.config.contains("@packagedefns")) {
-      return self.config["@packagedefns"]
-    } else ErrMorphoPckgDefns.throw() 
+    if (self.config.contains("@packagedefns")) return self.config["@packagedefns"]
+    var defns = self._finddefinitions()
+    if (defns) return defns
+    
+    ErrMorphoPckgDefns.throw() 
   }
 }
 
@@ -400,6 +412,7 @@ class MorphoPackageInstaller {
 class MorphoPackageManager {
   init(config, env) {
     self.config = config 
+    self.database = MorphoPackageDatabase(self.config.packageDefns())
     self.env = env 
   }
 
@@ -413,12 +426,7 @@ class MorphoPackageManager {
     print "morphopm version                  - displays version information"
   }
 
-  loadDatabase() {
-    self.database = MorphoPackageDatabase(self.config.packageDefns())
-  }
-
   install(name) {
-    self.loadDatabase()
     if (self.config[name]) {
       print "Package ${name} already installed"
     } else if (self.database.contains(name)) {
@@ -429,7 +437,6 @@ class MorphoPackageManager {
   }
 
   uninstall(name) {
-    self.loadDatabase()
     if (self.config[name]) {
       if (self.database.contains(name)) {
         var pkg = self.database[name]
@@ -440,7 +447,6 @@ class MorphoPackageManager {
   }
 
   upgrade(name) { 
-    self.loadDatabase()
     if (!self.database.contains(name)) ErrMorphoPMUnrcgnzdPckg.throw() 
 
     if (self.config[name]) {
@@ -454,13 +460,6 @@ class MorphoPackageManager {
       } else print "Package ${name} is already up-to-date."
     } else print "Package ${name} is not installed"
   }
-
-  _setdatabase(path) {
-    if (Folder.isfolder(path)) {
-      self.config.config["@packagedefns"] = path 
-      self.config.save() 
-    }
-  }  
 
   _multi(func, args) {
     var n = args.count()
@@ -483,8 +482,6 @@ class MorphoPackageManager {
         self.database.list() 
       } else if (args[0]=="version") {
         print _version
-      } else if (args[0]=="setdatabase") {
-        self._multi(self._setdatabase, args) 
       } else {
         ErrMorphoPMUnrcgnzd.warning()
         self.help() 
