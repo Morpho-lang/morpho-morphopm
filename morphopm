@@ -206,6 +206,7 @@ class MorphoConfig {
     for (f in defnsFolderLocations) {
       if (Folder.isfolder(f)) return f 
     }
+    return nil 
   }
 
   packageDefns() {
