@@ -2,13 +2,13 @@
 
 # morphopm
 
-`morphopm` is a simple package manager for the [morpho](https://github.com/Morpho-lang/morpho) language.  `morphopm` downloads known packages from a known git repository, builds them if necessary, and obtains external dependencies using external package managers.
+morphopm is a simple package manager for the [morpho](https://github.com/Morpho-lang/morpho) language. morphopm downloads known packages from a provided url, builds them if necessary, and can install additional dependencies using external package managers.
 
 To get a list of available packages:
 
     morphopm list    
 
-You can install a package list this:
+You can install a package like this:
 
     morphopm install <packagename>
 
@@ -28,4 +28,4 @@ It is recommended to install `morphopm` using homebrew:
 
 ## Preparing your own packages
 
-Packages must be hosted in a public git repository, e.g. on Github, and are defined within `morphopm` by a simple JSON file (see this repository for examples). Contributions of external packages are welcome; please fork this repository an make a Pull Request containing your package definition file.
+Packages must be hosted in a public git repository, e.g. on Github, and are defined to morphopm by a simple JSON file (see the packages folder in this repository for examples). Contributions of external packages are welcome; please fork this repository and make a Pull Request containing your package definition file in the packages folder.
