@@ -1,0 +1,484 @@
+#!/usr/bin/env morpho6
+
+/* ===============================================
+ *  morphopm - a basic package manager for morpho 
+ * ===============================================
+ *  v0.1.0 - 1/1/25 */
+
+var _version = "0.1.0"
+
+/* -------------------
+ * Error messages 
+ * ------------------- */
+
+var ErrMorphoPckgDefns = Error("ErrMorphoPMPckgDefns", "Missing package definitions folder")
+var ErrMorphoPckgFldr = Error("ErrMorphoPMPckgFldr", "Couldn't create package folder")
+var ErrMorphoPMUnrcgnzd = Error("ErrMorphoPMUnrcgnzd", "Unrecognized morphopm command")
+var ErrMorphoPMMssngPckg = Error("ErrMorphoPMMssngPckg", "Missing package name")
+var ErrMorphoPMUnrcgnzdPckg = Error("ErrMorphoPMUnrcgnzdPckg", "Unrecognized package name")
+var ErrMorphoPMFtch = Error("ErrMorphoPMFtch", "Couldn't fetch package file")
+var ErrMorphoPMUnzp = Error("ErrMorphoPMUnzp", "Couldn't unzip package file")
+var ErrMorphoPMRmZp = Error("ErrMorphoPMRmZp", "Couldn't remove package zip file")
+var ErrMorphoPMRmPckg = Error("ErrMorphoPMRmPckg", "Couldn't remove package file")
+var ErrMorphoPMDep = Error("ErrMorphoPMDep", "Couldn't install package dependency")
+var ErrMorphoPMCmkFldr = Error("ErrMorphoPMCmkFldr", "Couldn't make build folder for CMake")
+var ErrMorphoPMCmk = Error("ErrMorphoPMCmk", "CMake Err")
+var ErrMorphoDupPkg = Error("ErrMorphoDupPkg", "Morpho environment contains a duplicate package")
+var ErrMorphoVrsnPrse = Error("ErrMorphoVrsnPrse", "Incorrectly formatted version string")
+
+/* -------------------
+ * Locations
+ * ------------------- */
+
+var homeFolder = System.homefolder()
+
+var packageFolder = "${homeFolder}/morpho" // Where packages are installed
+var environmentFile = "${homeFolder}/.morphopackages" // The default environment is stored in ~/.morphopackages
+var configFile = "${homeFolder}/.morphopmconfig.json" // JSON file with installed packages
+
+/* -------------------
+ * Utility functions
+ * ------------------- */
+
+/** Perform a sytem command, checking that the return code is zero and if not raising an error  */
+fn systemErrCheck(String command, Error err) {
+  if (system(command)!=0) err.throw() 
+}
+
+/* -------------------
+ * Version 
+ * ------------------- */
+
+class Version {
+  init(str) {
+    self.parse(str)
+  }
+
+  parse(str) {
+    try {
+      var el = str.split(".")
+      self.major = Int(el[0])
+      self.minor = Int(el[1])
+      self.patch = Int(el[2])
+    } catch {
+      "ExpctArgNm" : ErrMorphoVrsnPrse.throw() 
+      "IndxBnds" : ErrMorphoVrsnPrse.throw() 
+    }
+  }
+
+  eq(Version v) {
+    return (self.major == v.major &&
+            self.minor == v.minor &&
+            self.patch == v.patch)
+  }
+  
+  gt(Version v) {
+    if (self.major > v.major) return true  
+    else if (self.major < v.major) return false 
+
+    if (self.minor > v.minor) return true 
+    if (self.minor < v.minor) return false 
+
+    if (self.patch > v.patch) return true 
+    return false 
+  }
+
+  prnt() {
+    System.prnt("${self.major}.${self.minor}.${self.patch}")
+  }
+}
+
+/* -------------------
+ * MorphoEnvironment 
+ * ------------------- */
+
+/** A MorphoEnvironment is a list of active packages that morpho will search to find an import. */
+
+class MorphoEnvironment {
+  init(env) {
+    self.env = env
+    self.load() 
+  }
+
+  load() {
+    self.packages = []
+    var f = File(self.env, "r")
+    for (l in f.lines()) self.packages.append(l)
+    f.close()
+  }
+
+  save() {
+    var f = File(self.env, "w")
+    for (l in self.packages) f.write(l)
+    f.close()
+  }
+
+  _checkDup() {
+    var dict = {}
+
+    for (p in self.packages) {
+      var pkg = p.split("/")
+      if (pkg.count()==0) continue
+      var pname = pkg[-1]
+
+      if (dict.contains(pname)) {
+        ErrMorphoDupPkg.warning("Morpho environment file ${self.env} contains potential duplicate packages:\n\n${dict[pname]}\n${p}\n")
+      } else dict[pname]=p
+    }
+  }
+
+  activate(file) {
+    if (!self.packages.contains(file)) {
+      self.packages.append(file)
+      self._checkDup()
+      self.save() 
+    }
+  }
+
+  deactivate(file) {
+    if (self.packages.contains(file)) {
+      self.packages.remove(file)
+      self.save() 
+    }
+  }
+
+  prnt() {
+    var pkg = self.load() 
+    for (p in pkg) System.prnt(p)
+  }
+}
+
+/* -------------------
+ * MorphoConfig
+ * ------------------- */
+
+/** The config file is a .json dictionary holding configuration information for morphopm, including the versions of currently installed packages */
+class MorphoConfig {
+  init(file) {
+    self.file = file 
+    self.load() 
+  }
+
+  load() {
+    try {
+      var f = File(self.file, "r")
+      var data = f.readall()
+      f.close() 
+      self.config = JSON.parse(data)
+    } catch {
+      "FlOpnFld" : ErrMorphoPckgDefns.throw() 
+    }
+  }
+
+  save() {
+    var data = JSON.tostring(self.config)
+    var f = File(self.file, "w")
+    f.write(data)
+    f.close() 
+  }
+
+  install(package, version) {
+    self.config[package]=version
+    self.save() 
+  }
+
+  uninstall(package) {
+    if (self.config.contains(package)) {
+      self.config.remove(package)
+      self.save() 
+    }
+  } 
+
+  index(package) { 
+    if (self.config.contains(package)) {
+      return self.config[package]
+    }  
+    return nil 
+  }
+
+  packageDefns() {
+    if (self.config.contains("@packagedefns")) {
+      return self.config["@packagedefns"]
+    } else ErrMorphoPckgDefns.throw() 
+  }
+}
+
+/* -------------------
+ * MorphoPackage 
+ * ------------------- */
+
+var _props = ("name", "version", "git", "url", "build", "dependencies")
+
+class MorphoPackage {
+  init(filename) {
+    for (p in _props) self[p]=nil
+    self.load(filename)
+  }
+
+  load(filename) {
+    var f = File(filename, "r")
+    var contents = f.readall()
+    f.close() 
+
+    var dict=JSON.parse(contents)
+    if (isdictionary(dict)) {
+      for (key in dict.keys()) {
+        self[key] = dict[key]
+      }
+      self.defn = filename
+    }
+  }
+
+  prnt() {
+    System.prnt("${self.name} (${self.version})")
+  }
+}
+
+/* ----------------------
+ * MorphoPackageDatabase 
+ * ---------------------- */
+
+/** The package database is a folder containing .json files that define packages available for morphopm to install */
+class MorphoPackageDatabase {
+  init(folder) {
+    self.folder = folder
+    self.defns = self.load()
+  }
+
+  _hasjsonext(file) {
+    var ext = file.split("/.")[-1]
+    return ext=="json"
+  }
+
+  load() {
+    var defnlist=Folder.contents(self.folder)
+    var defns = {} 
+
+    for (def in defnlist) {
+      if (!self._hasjsonext(def)) continue
+      var p = MorphoPackage("${self.folder}/${def}")
+      defns[p.name] = p
+    }
+
+    return defns
+  }  
+
+  contains(name) { // Check if we have a given package name
+    return self.defns.contains(name)
+  }  
+
+  index(name) { // Retrieve the package definition from the package name
+    return self.defns[name]
+  }
+
+  list() {
+    for (key in self.defns.keys()) print self.defns[key]
+  }
+}
+
+/* -----------------------
+ * MorphoPackageInstaller 
+ * ----------------------- */
+
+class MorphoPackageInstaller {
+  init(package, env) {
+    self.package = package
+    self.env = env
+  }
+
+  fetch(location) {
+    print "Fetching package ${self.package.name}"
+    // -L -> follow redirects
+    systemErrCheck("curl -L ${self.package.url} -o ${location}.zip", ErrMorphoPMFtch)
+  }
+
+  unzip(location) {
+    var tmp = "${location}-tmp"
+    var subfldr = "morpho-${self.package.name}-main"
+    print "Unzipping package ${self.package.name}"
+
+    // Extract zip contents into a temporary folder 
+    if (Folder.isfolder(location)) system("rm -r ${location}")
+    if (!Folder.isfolder(tmp)) systemErrCheck("mkdir ${tmp}", ErrMorphoPckgFldr)
+    systemErrCheck("unzip -o -q ${location}.zip -d ${tmp}", ErrMorphoPMUnzp)
+
+    // Move the contents of the temporary folder into the proper place
+    systemErrCheck("mv -f ${tmp}/${subfldr} ${location}", ErrMorphoPMUnzp)
+
+    // Cleanup 
+    systemErrCheck("rm ${location}.zip", ErrMorphoPMRmZp)
+    systemErrCheck("rm -r ${tmp}", ErrMorphoPMRmZp)
+  }
+
+  _pm() {
+    if (System.platform()=="macos") {
+      return "brew"
+    } else {
+      return "apt"
+    }
+  }
+
+  _installdep(dep) {
+    var pm = self._pm() 
+    if (pm=="brew") {
+      print "Using homebrew to install ${dep}"
+      systemErrCheck("brew install --quiet ${dep}", ErrMorphoPMDep)
+    } else if (pm=="apt") {
+      print "Using apt-get to install ${dep}"
+      systemErrCheck("apt-get ${dep}", ErrMorphoPMDep)
+    }
+  }
+
+  prereq() {
+    var pm = self._pm() 
+
+    if (self.package.dependencies &&
+      self.package.dependencies.contains(pm)) {
+    
+      print "Obtaining dependencies for ${self.package.name}"  
+      var deps = self.package.dependencies[pm]
+      if (isstring(deps)) self._installdep(deps) 
+      else for (dep in deps) self._installdep(dep) 
+    }
+  }
+
+  _cmake(location) {
+    var cwd = System.workingfolder()
+    var err = nil 
+    print "Building package ${self.package.name} with CMake"  
+
+    var bld = "${location}/build"
+    if (!Folder.isfolder(bld)) systemErrCheck("mkdir ${bld}", ErrMorphoPMCmkFldr)
+    System.setworkingfolder(bld)
+    systemErrCheck("cmake -DCMAKE_RULE_MESSAGES=OFF -DCMAKE_BUILD_TYPE=Release ..", ErrMorphoPMCmk)
+    systemErrCheck("make install", ErrMorphoPMCmk)
+
+    System.setworkingfolder(cwd)
+    if (err) err.throw() 
+  }
+
+  build(location) {
+    if (self.package.build=="cmake") {
+      self._cmake(location)
+    }
+  }
+
+  activate(location) {
+    print "Activating package ${self.package.name}"  
+    self.env.activate(location)
+  }
+
+  deactivate(location) {
+    print "Deactivating package ${self.package.name}"  
+    self.env.deactivate(location)
+  }
+
+  install(location) {
+    print "Installing package ${self.package.name}"  
+    self.prereq() 
+    self.fetch(location) 
+    self.unzip(location) 
+    self.build(location) 
+    self.activate(location) 
+  }
+
+  uninstall(location) {
+    self.deactivate(location) 
+    print "Uninstalling package ${self.package.name}"
+    if (Folder.isfolder(location)) {
+      systemErrCheck("rm -r ${location}",ErrMorphoPMRmPckg)
+    }
+  }
+}
+
+/* ----------------------
+ * MorphoPackageDatabase 
+ * ---------------------- */
+
+class MorphoPackageManager {
+  init(config, env) {
+    self.config = config 
+    self.database = MorphoPackageDatabase(config.packageDefns())
+    self.env = env 
+  }
+
+  help() {
+    print "Morphopm is a simple package manager for morpho"
+    print "Usage:"
+    print "morphopm help                     - displays this help message" 
+    print "morphopm install <packagename>    - installs a package"
+    print "morphopm uninstall <packagename>  - uninstalls a package"
+    print "morphopm upgrade <packagename>    - upgrades a package to the latest version"
+    print "morphopm version                  - displays version information"
+  }
+
+  install(name) {
+    if (self.config[name]) {
+      print "Package ${name} already installed"
+    } else if (self.database.contains(name)) {
+      var pkg = self.database[name]
+      MorphoPackageInstaller(pkg, self.env).install("${packageFolder}/morpho-${name}")
+      self.config.install(pkg.name, pkg.version)
+    } else ErrMorphoPMUnrcgnzdPckg.throw() 
+  }
+
+  uninstall(name) {
+    if (self.config[name]) {
+      if (self.database.contains(name)) {
+        var pkg = self.database[name]
+        MorphoPackageInstaller(pkg, self.env).uninstall("${packageFolder}/morpho-${name}")
+        self.config.uninstall(pkg.name)
+      } else ErrMorphoPMUnrcgnzdPckg.throw() 
+    } else print "Package ${name} is not installed"
+  }
+
+  upgrade(name) { 
+    if (!self.database.contains(name)) ErrMorphoPMUnrcgnzdPckg.throw() 
+
+    if (self.config[name]) {
+      var vInstalled = Version(self.config[name])
+      var vLatest = Version(self.database[name].version)
+
+      if (vLatest.gt(vInstalled)) {
+        print "Upgrading package ${name} to version ${vLatest}."
+        self.uninstall(name)
+        self.install(name)
+      } else print "Package ${name} is already up-to-date."
+    } else print "Package ${name} is not installed"
+  }
+
+  _multi(func, args) {
+    var n = args.count()
+    if (n<2) ErrMorphoPMMssngPckg.throw()
+    for (arg in args[1...n]) func(arg)
+  }
+
+  main(args) { // Parses commands
+    if (args.count()>0) {
+      if (args[0]=="install") {
+        self._multi(self.install, args) 
+      } else if (args[0]=="uninstall") {
+        self._multi(self.uninstall, args) 
+      } else if (args[0]=="upgrade") {
+        self._multi(self.upgrade, args) 
+      } else if (args[0]=="list") {
+        print "morphopm available packages:"
+        self.database.list() 
+      } else if (args[0]=="version") {
+        print _version
+      } else {
+        ErrMorphoPMUnrcgnzd.warning()
+        self.help() 
+      }
+    } else self.help() 
+  }
+}
+
+// Ensure the package folder exists 
+if (!Folder.isfolder(packageFolder)) {
+  systemErrCheck("mkdir ${packageFolder}", ErrMorphoPckgFldr) 
+}
+
+var app = MorphoPackageManager(MorphoConfig(configFile),
+                               MorphoEnvironment(environmentFile))
+app.main(System.arguments()) 
