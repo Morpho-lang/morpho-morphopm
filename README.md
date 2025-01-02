@@ -2,7 +2,7 @@
 
 # morphopm
 
-`morphopm` is a simple package manager for the [morpho](https://github.com/Morpho-lang/morpho) language.  `morphopm` downloads known packages from a known git repository, can build them if necessary, and obtains external dependencies using external package managers.
+`morphopm` is a simple package manager for the [morpho](https://github.com/Morpho-lang/morpho) language.  `morphopm` downloads known packages from a known git repository, builds them if necessary, and obtains external dependencies using external package managers.
 
 To get a list of available packages:
 
