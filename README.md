@@ -1,4 +1,4 @@
-![Morpho](/src/Figures/morphologosmall.png#gh-light-mode-only)![Morpho](/src/Figures/morphologosmall-white.png#gh-dark-mode-only)
+![Morpho](https://github.com/Morpho-lang/morpho-manual/blob/main/src/Figures/morphologosmall-white.png#gh-light-mode-only)![Morpho](https://github.com/Morpho-lang/morpho-manual/blob/main/src/Figures/morphologosmall-white.png#gh-dark-mode-only)
 
 # morphopm
 
