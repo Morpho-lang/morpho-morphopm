@@ -51,6 +51,37 @@ fn systemErrCheck(String command, Error err) {
   if (system(command)!=0) err.throw() 
 }
 
+/** Displays a table */
+fn displayTable(Array a) {
+  var b = a.clone() 
+  var dim = a.dimensions() 
+  var nrows = dim[0], ncols = dim[1]
+  var widths[dim[1]]
+
+  for (j in 0...ncols) { // Calculate maximum width of each column
+    widths[j]=0
+
+    for (i in 0...nrows) {
+      if (!isstring(a[i,j])) b[i,j]=String(a[i,j])
+
+      var w = b[i,j].count()
+      if (w>widths[j]) widths[j]=w
+    }
+  }
+
+  var out = ""
+  for (i in 0...nrows) {
+    for (j in 0...ncols) {
+      var w = b[i,j].count()
+      for (i in 0...widths[j]-w) out+=" "
+      out+=b[i,j]+" "
+    }
+    if (i<nrows-1) out+="\n"
+  }
+
+  print out
+}
+
 /* -------------------
  * Version 
  * ------------------- */
@@ -196,20 +227,24 @@ class MorphoConfig {
     f.close() 
   }
 
+  isInstalled(package) {
+    return self.config.contains(package)
+  }
+
   install(package, version) {
     self.config[package]=version
     self.save() 
   }
 
   uninstall(package) {
-    if (self.config.contains(package)) {
+    if (self.isInstalled(package)) {
       self.config.remove(package)
       self.save() 
     }
   } 
 
   index(package) { 
-    if (self.config.contains(package)) {
+    if (self.isInstalled(package)) {
       return self.config[package]
     }  
     return nil 
@@ -223,7 +258,7 @@ class MorphoConfig {
   }
 
   packageDefns() {
-    if (self.config.contains("@packagedefns")) return self.config["@packagedefns"]
+    if (self.isInstalled("@packagedefns")) return self.config["@packagedefns"]
     var defns = self._finddefinitions()
     if (defns) return defns
     
@@ -299,8 +334,25 @@ class MorphoPackageDatabase {
     return self.defns[name]
   }
 
-  list() {
-    for (key in self.defns.keys()) print self.defns[key]
+  _status(config, key, version) {
+    if (config) {
+      if (config.isInstalled(key)) {
+        if (config[key]==version) return "✅"
+        else return "⬆️"
+      } 
+    } 
+    return "" 
+  }
+
+  list(config=nil) {
+    var table = []
+
+    for (key, k in self.defns.keys()) {
+      var current = self.defns[key].version
+      table.append([key, "(${current})", self._status(config, key, current)])
+    }
+
+    displayTable(Array(table))
   }
 }
 
@@ -494,8 +546,8 @@ class MorphoPackageManager {
       } else if (args[0]=="upgrade") {
         self._multi(self.upgrade, args) 
       } else if (args[0]=="list") {
-        print "morphopm available packages:"
-        self.database.list() 
+        print "morphopm available packages: [✅=installed; ⬆️ =upgrade available]"
+        self.database.list(config=self.config) 
       } else if (args[0]=="version") {
         print _version
       } else {
