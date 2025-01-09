@@ -2,9 +2,17 @@
 
 # morphopm
 
-morphopm is a simple package manager for the [morpho](https://github.com/Morpho-lang/morpho) language. morphopm downloads known packages from a provided url, builds them if necessary, and can install additional dependencies using external package managers.
+morphopm is a simple package manager for the [morpho](https://github.com/Morpho-lang/morpho) language. morphopm has a database of available packages that it can download and build if necessary. morphopm can call external package managers like apt or homebrew to install additional dependencies if required.
 
-To get a list of available packages:
+## Installation
+
+It is recommended to install `morphopm` using homebrew:
+
+    brew install morpho-morphopm
+
+## Usage
+
+morphopm is run from the Terminal application. To get a list of available packages:
 
     morphopm list    
 
@@ -19,12 +27,6 @@ and remove one using:
 Update a package to the latest version:
 
     morphopm upgrade <packagename>
-
-## Installation
-
-It is recommended to install `morphopm` using homebrew:
-
-    brew install morpho-morphopm
 
 ## Preparing your own packages
 
