@@ -25,6 +25,7 @@ var ErrMorphoPMCmkFldr = Error("ErrMorphoPMCmkFldr", "Couldn't make build folder
 var ErrMorphoPMCmk = Error("ErrMorphoPMCmk", "CMake Err")
 var ErrMorphoDupPkg = Error("ErrMorphoDupPkg", "Morpho environment contains a duplicate package")
 var ErrMorphoVrsnPrse = Error("ErrMorphoVrsnPrse", "Incorrectly formatted version string")
+var ErrMorphoEnv = Error("ErrMorphoEnv", "Couldn't create environment file")
 
 /* -------------------
  * Locations
@@ -38,7 +39,8 @@ var configFile = "${homeFolder}/.morphopmconfig.json" // JSON file with installe
 
 var defnsFolderLocations = ( "/home/linuxbrew/.linuxbrew/share/morphopm", 
                              "/opt/homebrew/share/morphopm", 
-                             "/usr/local/share/morphopm" )
+                             "/usr/local/share/morphopm",
+                             "./packages" )
 
 /* -------------------
  * Utility functions
@@ -150,6 +152,17 @@ class MorphoEnvironment {
     var pkg = self.load() 
     for (p in pkg) System.prnt(p)
   }
+}
+
+/** Makes a blank environment file and initializes a MorphoEnvironment */
+fn CreateEnvironment(file) {
+  try {
+    var f = File(file, "w")
+    f.close()
+  } catch {
+    "FlOpnFld" : ErrMorphoEnv.throw() 
+  }
+  return MorphoEnvironment(file)
 }
 
 /* -------------------
@@ -422,6 +435,7 @@ class MorphoPackageManager {
     print "Usage:"
     print "morphopm help                     - displays this help message" 
     print "morphopm install <packagename>    - installs a package"
+    print "morphopm list                     - lists available packages"
     print "morphopm uninstall <packagename>  - uninstalls a package"
     print "morphopm upgrade <packagename>    - upgrades a package to the latest version"
     print "morphopm version                  - displays version information"
@@ -496,6 +510,13 @@ if (!Folder.isfolder(packageFolder)) {
   systemErrCheck("mkdir ${packageFolder}", ErrMorphoPckgFldr) 
 }
 
+var env 
+try {
+  env = MorphoEnvironment(environmentFile)
+} catch {
+  "FlOpnFld" : env = CreateEnvironment(environmentFile) 
+}
+
 var app = MorphoPackageManager(MorphoConfig(configFile),
-                               MorphoEnvironment(environmentFile))
+                               env)
 app.main(System.arguments()) 
