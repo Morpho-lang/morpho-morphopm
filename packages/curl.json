@@ -4,5 +4,5 @@
     "git" : "https://github.com/morpho-lang/morpho-curl",
     "url" : "https://github.com/Morpho-lang/morpho-curl/archive/refs/heads/main.zip",
     "build" : "cmake",
-    "dependencies" : { "apt" : "libcurl-dev" }
+    "dependencies" : { "apt" : "libcurl4-openssl-dev" }
 }

@@ -353,7 +353,8 @@ class MorphoPackageInstaller {
       systemErrCheck("brew install --quiet ${dep}", ErrMorphoPMDep)
     } else if (pm=="apt") {
       print "Using apt-get to install ${dep}"
-      systemErrCheck("apt-get ${dep}", ErrMorphoPMDep)
+      print "Please note apt may ask you for your password to install missing packages."
+      systemErrCheck("sudo apt-get install ${dep}", ErrMorphoPMDep)
     }
   }
 
