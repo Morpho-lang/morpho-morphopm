@@ -3,7 +3,8 @@
 /* ===============================================
  *  morphopm - a basic package manager for morpho 
  * ===============================================
- *  v0.1.0 - 1/1/25 */
+ *  v0.1.0 - 1/1/25
+ *  v0.2.0 - 1/2/26 (Windows support) */
 
 var _version = "0.1.0"
 
@@ -12,7 +13,6 @@ var _version = "0.1.0"
  * ------------------- */
 
 var ErrMorphoPckgDefns = Error("ErrMorphoPMPckgDefns", "Missing package definitions folder")
-var ErrMorphoPckgFldr = Error("ErrMorphoPMPckgFldr", "Couldn't create package folder")
 var ErrMorphoPMUnrcgnzd = Error("ErrMorphoPMUnrcgnzd", "Unrecognized morphopm command")
 var ErrMorphoPMMssngPckg = Error("ErrMorphoPMMssngPckg", "Missing package name")
 var ErrMorphoPMUnrcgnzdPckg = Error("ErrMorphoPMUnrcgnzdPckg", "Unrecognized package name")
@@ -41,6 +41,8 @@ var defnsFolderLocations = ( "/home/linuxbrew/.linuxbrew/share/morphopm",
                              "/opt/homebrew/share/morphopm", 
                              "/usr/local/share/morphopm",
                              "./packages" )
+
+var isWindows = (System.platform()=="windows") // Check if we're on windows at the start
 
 /* -------------------
  * Utility functions
@@ -252,7 +254,7 @@ class MorphoConfig {
 
   _finddefinitions() {
     for (f in defnsFolderLocations) {
-      if (Folder.isfolder(f)) return f 
+      if (Folder.isFolder(f)) return f 
     }
     return nil 
   }
@@ -372,22 +374,54 @@ class MorphoPackageInstaller {
     systemErrCheck("curl -L ${self.package.url} -o ${location}.zip", ErrMorphoPMFtch)
   }
 
+  _unzip(src, dest, err) {
+    var nsrc = Folder.normalizePath(src), ndest = Folder.normalizePath(dest)
+    if (isWindows) systemErrCheck("tar -xf ${nsrc} -C ${ndest}", err)
+    else systemErrCheck("unzip -o -q ${src} -d ${dest}", err)
+  }
+
+  _move(src, dest, err) {
+    if (isWindows) {
+      var nsrc = Folder.normalizePath(src), ndest = Folder.normalizePath(dest)
+      systemErrCheck("move /y ${nsrc} ${ndest} >nul 2>&1", err)
+    } else systemErrCheck("mv -f ${src} ${dest}", err)
+  }
+
+  _removeFile(file, err) {
+    if (isWindows) {
+      systemErrCheck("del /f /q ${Folder.normalizePath(file)}", err)
+    } else systemErrCheck("rm ${file}", err)
+  }
+
+  _removeFolder(folder) {
+    if (isWindows) {
+      system("rmdir /s /q ${Folder.normalizePath(folder)}")
+    } else system("rm -r ${folder}")
+  }
+
+  _removeFolder(folder, err) {
+    if (isWindows) {
+      systemErrCheck("rmdir /s /q ${Folder.normalizePath(folder)}", err)
+    } else systemErrCheck("rm -r ${folder}", err)
+  }
+
   unzip(location) {
     var tmp = "${location}-tmp"
     var subfldr = "morpho-${self.package.name}-main"
     print "Unzipping package ${self.package.name}"
 
     // Extract zip contents into a temporary folder 
-    if (Folder.isfolder(location)) system("rm -r ${location}")
-    if (!Folder.isfolder(tmp)) systemErrCheck("mkdir ${tmp}", ErrMorphoPckgFldr)
-    systemErrCheck("unzip -o -q ${location}.zip -d ${tmp}", ErrMorphoPMUnzp)
+    if (Folder.isFolder(location)) _removeFolder(location) //system("rm -r ${location}")
+    if (!Folder.isFolder(tmp)) Folder.create(tmp)
+    
+    _unzip("${location}.zip", tmp, ErrMorphoPMUnzp)
 
     // Move the contents of the temporary folder into the proper place
-    systemErrCheck("mv -f ${tmp}/${subfldr} ${location}", ErrMorphoPMUnzp)
-
+    _move("${tmp}/${subfldr}", location, ErrMorphoPMUnzp)
+    
     // Cleanup 
-    systemErrCheck("rm ${location}.zip", ErrMorphoPMRmZp)
-    systemErrCheck("rm -r ${tmp}", ErrMorphoPMRmZp)
+    _removeFile("${location}.zip", ErrMorphoPMRmZp)
+    _removeFolder(tmp, ErrMorphoPMRmZp)
   }
 
   _pm() {
@@ -429,7 +463,9 @@ class MorphoPackageInstaller {
     print "Building package ${self.package.name} with CMake"  
 
     var bld = "${location}/build"
-    if (!Folder.isfolder(bld)) systemErrCheck("mkdir ${bld}", ErrMorphoPMCmkFldr)
+    if (!Folder.isFolder(bld)) {
+      try { Folder.create(bld) } catch { "FldrCrtFld": ErrMorphoPMCmkFldr.throw() }
+    }
     System.setworkingfolder(bld)
     systemErrCheck("cmake -DCMAKE_RULE_MESSAGES=OFF -DCMAKE_BUILD_TYPE=Release ..", ErrMorphoPMCmk)
     systemErrCheck("make install", ErrMorphoPMCmk)
@@ -455,19 +491,21 @@ class MorphoPackageInstaller {
   }
 
   install(location) {
+    var loc = Folder.normalizePath(location)
     print "Installing package ${self.package.name}"  
     self.prereq() 
-    self.fetch(location) 
-    self.unzip(location) 
-    self.build(location) 
-    self.activate(location) 
+    self.fetch(loc) 
+    self.unzip(loc) 
+    self.build(loc) 
+    self.activate(loc) 
   }
 
   uninstall(location) {
-    self.deactivate(location) 
+    var loc = Folder.normalizePath(location)
+    self.deactivate(loc) 
     print "Uninstalling package ${self.package.name}"
-    if (Folder.isfolder(location)) {
-      systemErrCheck("rm -r ${location}",ErrMorphoPMRmPckg)
+    if (Folder.isFolder(loc)) {
+      _removeFolder(loc, ErrMorphoPMRmPckg)
     }
   }
 }
@@ -559,8 +597,9 @@ class MorphoPackageManager {
 }
 
 // Ensure the package folder exists 
-if (!Folder.isfolder(packageFolder)) {
-  systemErrCheck("mkdir ${packageFolder}", ErrMorphoPckgFldr) 
+if (!Folder.isFolder(packageFolder)) {
+  print "Creating folder `${Folder.normalizePath(packageFolder)}` where morpho packages will be stored."
+  Folder.create(packageFolder)
 }
 
 var env 
