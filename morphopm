@@ -44,6 +44,9 @@ var defnsFolderLocations = ( "/home/linuxbrew/.linuxbrew/share/morphopm",
 
 var isWindows = (System.platform()=="windows") // Check if we're on windows at the start
 
+var checkMark = (isWindows ? "[X]" : "✅") // Windows terminals often have trouble with emoji
+var upArrow = (isWindows ? "[^]" : "⬆️")
+
 /* -------------------
  * Utility functions
  * ------------------- */
@@ -339,8 +342,8 @@ class MorphoPackageDatabase {
   _status(config, key, version) {
     if (config) {
       if (config.isInstalled(key)) {
-        if (config[key]==version) return "✅"
-        else return "⬆️"
+        if (config[key]==version) return checkMark
+        else return upArrow
       } 
     } 
     return "" 
@@ -382,14 +385,15 @@ class MorphoPackageInstaller {
 
   _move(src, dest, err) {
     if (isWindows) {
-      var nsrc = Folder.normalizePath(src), ndest = Folder.normalizePath(dest)
-      systemErrCheck("move /y ${nsrc} ${ndest} >nul 2>&1", err)
+      var nsrc = Folder.normalizePath(src)
+      var ndest = Folder.normalizePath(dest)
+      systemErrCheck("powershell -Command \"Move-Item -LiteralPath '${nsrc}' -Destination '${ndest}' -Force\"", err)
     } else systemErrCheck("mv -f ${src} ${dest}", err)
   }
 
   _removeFile(file, err) {
     if (isWindows) {
-      systemErrCheck("del /f /q ${Folder.normalizePath(file)}", err)
+      systemErrCheck("del /f /q ${Folder.normalizePath(file)} >nul 2>&1", err)
     } else systemErrCheck("rm ${file}", err)
   }
 
@@ -407,7 +411,6 @@ class MorphoPackageInstaller {
 
   unzip(location) {
     var tmp = "${location}-tmp"
-    var subfldr = "morpho-${self.package.name}-main"
     print "Unzipping package ${self.package.name}"
 
     // Extract zip contents into a temporary folder 
@@ -415,6 +418,9 @@ class MorphoPackageInstaller {
     if (!Folder.isFolder(tmp)) Folder.create(tmp)
     
     _unzip("${location}.zip", tmp, ErrMorphoPMUnzp)
+
+    var entries = Folder.contents(tmp) 
+    var subfldr = entries[0] // Expect a single folder included in the zip
 
     // Move the contents of the temporary folder into the proper place
     _move("${tmp}/${subfldr}", location, ErrMorphoPMUnzp)
@@ -459,19 +465,26 @@ class MorphoPackageInstaller {
 
   _cmake(location) {
     var cwd = System.workingfolder()
-    var err = nil 
-    print "Building package ${self.package.name} with CMake"  
+    print "Building package ${self.package.name} with CMake"
 
     var bld = "${location}/build"
     if (!Folder.isFolder(bld)) {
-      try { Folder.create(bld) } catch { "FldrCrtFld": ErrMorphoPMCmkFldr.throw() }
+        try { Folder.create(bld) } catch { "FldrCrtFld": ErrMorphoPMCmkFldr.throw() }
     }
+
     System.setworkingfolder(bld)
-    systemErrCheck("cmake -DCMAKE_RULE_MESSAGES=OFF -DCMAKE_BUILD_TYPE=Release ..", ErrMorphoPMCmk)
-    systemErrCheck("make install", ErrMorphoPMCmk)
+
+    var gen = "" 
+    if (isWindows && system("ninja --version >nul 2>&1")==0) gen = "-G Ninja" // Use ninja on windows if available
+
+    systemErrCheck(
+        "cmake ${gen} -DCMAKE_RULE_MESSAGES=OF-DCMAKE_INSTALL_PREFIX=\"${location}\" -DCMAKE_BUILD_TYPE=Release ..",
+        ErrMorphoPMCmk
+    )
+
+    systemErrCheck("cmake --build . --config Release --target install", ErrMorphoPMCmk)
 
     System.setworkingfolder(cwd)
-    if (err) err.throw() 
   }
 
   build(location) {
@@ -584,7 +597,7 @@ class MorphoPackageManager {
       } else if (args[0]=="upgrade") {
         self._multi(self.upgrade, args) 
       } else if (args[0]=="list") {
-        print "morphopm available packages: [✅=installed; ⬆️ =upgrade available]"
+        print "morphopm available packages: (${checkMark}=installed; ${upArrow} =upgrade available)"
         self.database.list(config=self.config) 
       } else if (args[0]=="version") {
         print _version
