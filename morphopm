@@ -40,6 +40,7 @@ var configFile = "${homeFolder}/.morphopmconfig.json" // JSON file with installe
 var defnsFolderLocations = ( "/home/linuxbrew/.linuxbrew/share/morphopm", 
                              "/opt/homebrew/share/morphopm", 
                              "/usr/local/share/morphopm",
+                             "C:/Program Files/Morpho/share/morphopm",
                              "./packages" )
 
 var isWindows = (System.platform()=="windows") // Check if we're on windows at the start
@@ -257,7 +258,8 @@ class MorphoConfig {
 
   _finddefinitions() {
     for (f in defnsFolderLocations) {
-      if (Folder.isFolder(f)) return f 
+      var fnormal = Folder.normalizePath(f)
+      if (Folder.isFolder(fnormal)) return fnormal
     }
     return nil 
   }
@@ -433,6 +435,8 @@ class MorphoPackageInstaller {
   _pm() {
     if (System.platform()=="macos") {
       return "brew"
+    } else if (isWindows) {
+      return "winget"
     } else {
       return "apt"
     }
@@ -443,6 +447,10 @@ class MorphoPackageInstaller {
     if (pm=="brew") {
       print "Using homebrew to install ${dep}"
       systemErrCheck("brew install --quiet ${dep}", ErrMorphoPMDep)
+    } else if (pm=="winget") {
+      print "Using winget to install ${dep}"
+      print "Winget may launch a separate window to perform the installation; you may need to accept the installation."
+      systemErrCheck("winget install ${dep}", ErrMorphoPMDep)
     } else if (pm=="apt") {
       print "Using apt-get to install ${dep}"
       print "Please note apt may ask you for your password to install missing packages."
