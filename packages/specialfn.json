@@ -1,0 +1,7 @@
+{
+    "name" : "specialfn",
+    "version" : "1.0.0",
+    "git" : "https://github.com/morpho-lang/morpho-specialfn",
+    "url" : "https://github.com/Morpho-lang/morpho-specialfn/archive/refs/tags/v1.0.0.zip",
+    "build" : "cmake"
+}
