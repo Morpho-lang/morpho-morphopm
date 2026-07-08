@@ -8,6 +8,7 @@
  *     - fix unzipping Github archives
  *     - add cleanup after failed install
  *     - add setdatabase command to use custom package definitions
+ *     - validate package database folder before loading
  * =============================================== */
 
 var _version = "0.2.0"
@@ -54,6 +55,21 @@ var defnsFolderLocations = ( "/home/linuxbrew/.linuxbrew/share/morphopm",
 /** Perform a sytem command, checking that the return code is zero and if not raising an error  */
 fn systemErrCheck(String command, Error err) {
   if (system(command)!=0) err.throw() 
+}
+
+/** Returns true if a normalized path is absolute on the current platform */
+fn _isabsolutepath(path) {
+  if (path.count()==0) return false
+  if (path[0]=="/") return true
+  if (path.count()>=2 && path[1]==":") return true
+  return false
+}
+
+/** Resolve a relative path against the current working folder */
+fn _abspath(path) {
+  path = Folder.normalizePath(path)
+  if (_isabsolutepath(path)) return path
+  return Folder.normalizePath("${System.workingfolder()}/${path}")
 }
 
 /** Displays a table */
@@ -262,7 +278,10 @@ class MorphoConfig {
   }
 
   packageDefns() {
-    if (self.isInstalled("@packagedefns")) return self.config["@packagedefns"]
+    if (self.isInstalled("@packagedefns")) {
+      var path = self.config["@packagedefns"]
+      if (Folder.isfolder(path)) return path
+    }
     var defns = self._finddefinitions()
     if (defns) return defns
     
@@ -556,6 +575,7 @@ class MorphoPackageManager {
   }
 
   _setdatabase(path) {
+    path = _abspath(path)
     if (Folder.isfolder(path)) {
       self.config.setPackageDefns(path)
       self.loadDatabase()
