@@ -185,8 +185,7 @@ class MorphoEnvironment {
   }
 
   prnt() {
-    var pkg = self.load() 
-    for (p in pkg) System.prnt(p)
+    for (p in self.packages) System.prnt(p)
   }
 }
 
@@ -475,7 +474,6 @@ class MorphoPackageInstaller {
 
   _cmake(location) {
     var cwd = System.workingfolder()
-    var err = nil 
     print "Building package ${self.package.name} with CMake"  
 
     var bld = "${location}/build"
@@ -485,7 +483,6 @@ class MorphoPackageInstaller {
     systemErrCheck("make install", ErrMorphoPMCmk)
 
     System.setworkingfolder(cwd)
-    if (err) err.throw() 
   }
 
   build(location) {
@@ -533,7 +530,7 @@ class MorphoPackageInstaller {
 }
 
 /* ----------------------
- * MorphoPackageDatabase 
+ * MorphoPackageManager 
  * ---------------------- */
 
 class MorphoPackageManager {
