@@ -6,7 +6,9 @@
  *  v0.1.0 - 1/1/25
  *  v0.2.0 - 7/8/26 
  *     - fix unzipping Github archives
- *     - add cleanup after failed install */
+ *     - add cleanup after failed install
+ *     - add setdatabase command to use custom package definitions
+ * =============================================== */
 
 var _version = "0.2.0"
 
@@ -266,6 +268,11 @@ class MorphoConfig {
     if (defns) return defns
     
     ErrMorphoPckgDefns.throw() 
+  }
+
+  setPackageDefns(path) {
+    self.config["@packagedefns"] = path
+    self.save() 
   }
 }
 
@@ -532,8 +539,12 @@ class MorphoPackageInstaller {
 class MorphoPackageManager {
   init(config, env) {
     self.config = config 
-    self.database = MorphoPackageDatabase(self.config.packageDefns())
     self.env = env 
+    self.loadDatabase()
+  }
+
+  loadDatabase() {
+    self.database = MorphoPackageDatabase(self.config.packageDefns())
   }
 
   help() {
@@ -547,7 +558,16 @@ class MorphoPackageManager {
     print "morphopm version                  - displays version information"
   }
 
+  _setdatabase(path) {
+    if (Folder.isfolder(path)) {
+      self.config.setPackageDefns(path)
+      self.loadDatabase()
+      print "Package database set to ${path}"
+    } else ErrMorphoPckgDefns.throw()
+  }
+
   install(name) {
+    self.loadDatabase()
     if (self.config[name]) {
       print "Package ${name} already installed"
     } else if (self.database.contains(name)) {
@@ -558,6 +578,7 @@ class MorphoPackageManager {
   }
 
   uninstall(name) {
+    self.loadDatabase()
     if (self.config[name]) {
       if (self.database.contains(name)) {
         var pkg = self.database[name]
@@ -568,6 +589,7 @@ class MorphoPackageManager {
   }
 
   upgrade(name) { 
+    self.loadDatabase()
     if (!self.database.contains(name)) ErrMorphoPMUnrcgnzdPckg.throw() 
 
     if (self.config[name]) {
@@ -599,10 +621,13 @@ class MorphoPackageManager {
       } else if (args[0]=="upgrade") {
         self._multi(self.upgrade, args) 
       } else if (args[0]=="list") {
+        self.loadDatabase()
         print "morphopm available packages: [✅=installed; ⬆️ =upgrade available]"
         self.database.list(config=self.config) 
       } else if (args[0]=="version") {
         print _version
+      } else if (args[0]=="setdatabase") {
+        self._multi(self._setdatabase, args)
       } else {
         ErrMorphoPMUnrcgnzd.warning()
         self.help() 
