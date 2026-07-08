@@ -3,9 +3,10 @@
 /* ===============================================
  *  morphopm - a basic package manager for morpho 
  * ===============================================
- *  v0.1.0 - 1/1/25 */
+ *  v0.1.0 - 1/1/25
+ *  v0.2.0 - 7/8/26 - fix unzipping Github archives */
 
-var _version = "0.1.0"
+var _version = "0.2.0"
 
 /* -------------------
  * Error messages 
@@ -372,9 +373,31 @@ class MorphoPackageInstaller {
     systemErrCheck("curl -L ${self.package.url} -o ${location}.zip", ErrMorphoPMFtch)
   }
 
+  // GitHub archives unpack into a single top-level folder whose name depends
+  // on the ref: branch zips use morpho-<name>-main, while tag zips use
+  // morpho-<name>-<version> (or morpho-<name>-v<version>). Discover the
+  // folder rather than assuming a fixed name.
+  _findArchiveRoot(tmp) {
+    var name = self.package.name
+    var version = self.package.version
+    var candidates = [ "morpho-${name}-main",
+                       "morpho-${name}-${version}",
+                       "morpho-${name}-v${version}" ]
+
+    for (c in candidates) {
+      if (Folder.isfolder("${tmp}/${c}")) return c
+    }
+
+    // Fallback: use the first subdirectory in the archive
+    for (item in Folder.contents(tmp)) {
+      if (Folder.isfolder("${tmp}/${item}")) return item
+    }
+
+    ErrMorphoPMUnzp.throw()
+  }
+
   unzip(location) {
     var tmp = "${location}-tmp"
-    var subfldr = "morpho-${self.package.name}-main"
     print "Unzipping package ${self.package.name}"
 
     // Extract zip contents into a temporary folder 
@@ -383,6 +406,7 @@ class MorphoPackageInstaller {
     systemErrCheck("unzip -o -q ${location}.zip -d ${tmp}", ErrMorphoPMUnzp)
 
     // Move the contents of the temporary folder into the proper place
+    var subfldr = self._findArchiveRoot(tmp)
     systemErrCheck("mv -f ${tmp}/${subfldr} ${location}", ErrMorphoPMUnzp)
 
     // Cleanup 
