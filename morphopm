@@ -4,7 +4,9 @@
  *  morphopm - a basic package manager for morpho 
  * ===============================================
  *  v0.1.0 - 1/1/25
- *  v0.2.0 - 7/8/26 - fix unzipping Github archives */
+ *  v0.2.0 - 7/8/26 
+ *     - fix unzipping Github archives
+ *     - add cleanup after failed install */
 
 var _version = "0.2.0"
 
@@ -74,7 +76,7 @@ fn displayTable(Array a) {
   for (i in 0...nrows) {
     for (j in 0...ncols) {
       var w = b[i,j].count()
-      for (i in 0...widths[j]-w) out+=" "
+      for (k in 0...widths[j]-w) out+=" "
       out+=b[i,j]+" "
     }
     if (i<nrows-1) out+="\n"
@@ -367,6 +369,22 @@ class MorphoPackageInstaller {
     self.env = env
   }
 
+  // Remove partial install artifacts after a failed install. Best-effort: errors
+  // are ignored so cleanup itself does not mask the original failure.
+  _cleanupFailedInstall(location) {
+    print "Cleaning up failed install of ${self.package.name}"
+    self.deactivate(location)
+    var tmp = "${location}-tmp"
+    if (Folder.isfolder(tmp)) system("rm -r ${tmp}")
+    system("rm -f ${location}.zip")
+    if (Folder.isfolder(location)) system("rm -r ${location}")
+  }
+
+  _recover(location, err) {
+    self._cleanupFailedInstall(location)
+    err.throw()
+  }
+
   fetch(location) {
     print "Fetching package ${self.package.name}"
     // -L -> follow redirects
@@ -402,7 +420,8 @@ class MorphoPackageInstaller {
 
     // Extract zip contents into a temporary folder 
     if (Folder.isfolder(location)) system("rm -r ${location}")
-    if (!Folder.isfolder(tmp)) systemErrCheck("mkdir ${tmp}", ErrMorphoPckgFldr)
+    if (Folder.isfolder(tmp)) system("rm -r ${tmp}")
+    systemErrCheck("mkdir ${tmp}", ErrMorphoPckgFldr)
     systemErrCheck("unzip -o -q ${location}.zip -d ${tmp}", ErrMorphoPMUnzp)
 
     // Move the contents of the temporary folder into the proper place
@@ -480,11 +499,21 @@ class MorphoPackageInstaller {
 
   install(location) {
     print "Installing package ${self.package.name}"  
-    self.prereq() 
-    self.fetch(location) 
-    self.unzip(location) 
-    self.build(location) 
-    self.activate(location) 
+    try {
+      self.prereq() 
+      self.fetch(location) 
+      self.unzip(location) 
+      self.build(location) 
+      self.activate(location)
+    } catch {
+      "ErrMorphoPMDep": self._recover(location, ErrMorphoPMDep)
+      "ErrMorphoPMFtch": self._recover(location, ErrMorphoPMFtch)
+      "ErrMorphoPMPckgFldr": self._recover(location, ErrMorphoPckgFldr)
+      "ErrMorphoPMUnzp": self._recover(location, ErrMorphoPMUnzp)
+      "ErrMorphoPMRmZp": self._recover(location, ErrMorphoPMRmZp)
+      "ErrMorphoPMCmkFldr": self._recover(location, ErrMorphoPMCmkFldr)
+      "ErrMorphoPMCmk": self._recover(location, ErrMorphoPMCmk)
+    }
   }
 
   uninstall(location) {
