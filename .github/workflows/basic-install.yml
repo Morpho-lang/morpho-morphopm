@@ -19,7 +19,7 @@ jobs:
 
     - name: Build and install Morpho
       run: |
-        git clone --depth 1 https://github.com/Morpho-lang/morpho.git
+        git clone --depth 1 --branch dev https://github.com/Morpho-lang/morpho.git
         cd morpho
         cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
         cmake --build build --config Release
@@ -28,7 +28,7 @@ jobs:
 
     - name: Build and install morpho-cli
       run: |
-        git clone --depth 1 https://github.com/Morpho-lang/morpho-cli.git
+        git clone --depth 1 --branch inline https://github.com/Morpho-lang/morpho-cli.git
         cd morpho-cli
         cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
         cmake --build build --config Release
@@ -36,6 +36,7 @@ jobs:
 
     - name: Smoke test morphopm
       run: |
-        ./morphopm version
-        ./morphopm help
-        ./morphopm list
+        chmod +x .github/scripts/run-morphopm.sh
+        .github/scripts/run-morphopm.sh version
+        .github/scripts/run-morphopm.sh help
+        .github/scripts/run-morphopm.sh list

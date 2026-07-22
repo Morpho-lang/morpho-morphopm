@@ -22,7 +22,7 @@ jobs:
 
     - name: Build and install Morpho
       run: |
-        git clone --depth 1 https://github.com/Morpho-lang/morpho.git
+        git clone --depth 1 --branch dev https://github.com/Morpho-lang/morpho.git
         cd morpho
         cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
         cmake --build build --config Release
@@ -33,7 +33,7 @@ jobs:
 
     - name: Build and install morpho-cli
       run: |
-        git clone --depth 1 https://github.com/Morpho-lang/morpho-cli.git
+        git clone --depth 1 --branch inline https://github.com/Morpho-lang/morpho-cli.git
         cd morpho-cli
         cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
         cmake --build build --config Release
@@ -41,8 +41,9 @@ jobs:
 
     - name: Install all packages from morphopm list
       run: |
-        ./morphopm list
-        mapfile -t packages < <(./morphopm list | awk 'NR>1 && NF {print $1}')
+        chmod +x .github/scripts/run-morphopm.sh
+        .github/scripts/run-morphopm.sh list
+        mapfile -t packages < <(.github/scripts/run-morphopm.sh list | awk 'NR>1 && NF {print $1}')
         if [ ${#packages[@]} -eq 0 ]; then
           echo "No packages discovered from morphopm list" >&2
           exit 1
@@ -50,7 +51,7 @@ jobs:
         echo "Discovered packages: ${packages[*]}"
         for pkg in "${packages[@]}"; do
           echo "::group::Installing ${pkg}"
-          ./morphopm install "${pkg}"
+          .github/scripts/run-morphopm.sh install "${pkg}"
           echo "::endgroup::"
         done
-        ./morphopm list
+        .github/scripts/run-morphopm.sh list
