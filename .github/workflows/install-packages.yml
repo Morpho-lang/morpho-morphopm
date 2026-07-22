@@ -1,0 +1,56 @@
+name: Install packages
+
+on:
+  push:
+    branches: [ "main", "dev" ]
+  pull_request:
+    branches: [ "main", "dev" ]
+
+jobs:
+  install-packages:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Morpho and package dependencies
+      run: |
+        sudo apt update
+        # Morpho / morpho-cli build deps
+        sudo apt install -y libsuitesparse-dev liblapacke-dev libunistring-dev
+        # Package apt deps (morphopm calls apt-get without -y; preinstall so install is a no-op)
+        sudo apt install -y libcurl4-openssl-dev libczmq-dev unzip
+
+    - name: Build and install Morpho
+      run: |
+        git clone --depth 1 https://github.com/Morpho-lang/morpho.git
+        cd morpho
+        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        cmake --build build --config Release
+        sudo cmake --install build --config Release
+        sudo mkdir -p /usr/local/lib/morpho
+        # Package cmake builds call `make install` without sudo
+        sudo chown -R "$USER" /usr/local
+
+    - name: Build and install morpho-cli
+      run: |
+        git clone --depth 1 https://github.com/Morpho-lang/morpho-cli.git
+        cd morpho-cli
+        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        cmake --build build --config Release
+        cmake --install build --config Release
+
+    - name: Install all packages from morphopm list
+      run: |
+        ./morphopm list
+        mapfile -t packages < <(./morphopm list | awk 'NR>1 && NF {print $1}')
+        if [ ${#packages[@]} -eq 0 ]; then
+          echo "No packages discovered from morphopm list" >&2
+          exit 1
+        fi
+        echo "Discovered packages: ${packages[*]}"
+        for pkg in "${packages[@]}"; do
+          echo "::group::Installing ${pkg}"
+          ./morphopm install "${pkg}"
+          echo "::endgroup::"
+        done
+        ./morphopm list
