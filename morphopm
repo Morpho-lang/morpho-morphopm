@@ -4,14 +4,13 @@
  *  morphopm - a basic package manager for morpho 
  * ===============================================
  *  v0.1.0 - 1/1/25
- *  v0.2.0 - 1/2/26 / 7/8/26
- *     - Windows support
+ *  v0.2.0 - 7/8/26
  *     - fix unzipping Github archives
  *     - add cleanup after failed install
  *     - add setdatabase command to use custom package definitions
  *     - validate package database folder before loading
  *  v0.2.1 - 7/28/26
- *     - merge Windows support with main-line features
+ *     - Windows support
  * =============================================== */
 
 var _version = "0.2.1"
@@ -42,9 +41,9 @@ var ErrMorphoEnv = Error("ErrMorphoEnv", "Couldn't create environment file")
 
 var homeFolder = System.homefolder()
 
-var packageFolder = "${homeFolder}/morpho" // Where packages are installed
-var environmentFile = "${homeFolder}/.morphopackages" // The default environment is stored in ~/.morphopackages
-var configFile = "${homeFolder}/.morphopmconfig.json" // JSON file with installed packages
+var packageFolder = Folder.normalizePath("${homeFolder}/morpho") // Where packages are installed
+var environmentFile = Folder.normalizePath("${homeFolder}/.morphopackages") // The default environment is stored in ~/.morphopackages
+var configFile = Folder.normalizePath("${homeFolder}/.morphopmconfig.json") // JSON file with installed packages
 
 var defnsFolderLocations = ( "/home/linuxbrew/.linuxbrew/share/morphopm", 
                              "/opt/homebrew/share/morphopm", 
@@ -67,7 +66,7 @@ fn systemErrCheck(String command, Error err) {
 }
 
 /** Returns true if a normalized path is absolute on the current platform */
-fn _isabsolutepath(path) {
+fn _isAbsolutePath(path) {
   if (path.count()==0) return false
   if (path[0]=="/") return true
   if (path.count()>=2 && path[1]==":") return true
@@ -75,10 +74,17 @@ fn _isabsolutepath(path) {
 }
 
 /** Resolve a relative path against the current working folder */
-fn _abspath(path) {
+fn _absPath(path) {
   path = Folder.normalizePath(path)
-  if (_isabsolutepath(path)) return path
+  if (_isAbsolutePath(path)) return path
   return Folder.normalizePath("${System.workingfolder()}/${path}")
+}
+
+/** Last path component, handling both / and \ separators */
+fn _baseName(path) {
+  var parts = Folder.normalizePath(path).split("/\\")
+  if (parts.count()==0) return path
+  return parts[-1]
 }
 
 /** Displays a table */
@@ -184,9 +190,8 @@ class MorphoEnvironment {
     var dict = {}
 
     for (p in self.packages) {
-      var pkg = p.split("/")
-      if (pkg.count()==0) continue
-      var pname = pkg[-1]
+      var pname = _baseName(p)
+      if (pname.count()==0) continue
 
       if (dict.contains(pname)) {
         ErrMorphoDupPkg.warning("Morpho environment file ${self.env} contains potential duplicate packages:\n\n${dict[pname]}\n${p}\n")
@@ -215,7 +220,7 @@ class MorphoEnvironment {
 }
 
 /** Makes a blank environment file and initializes a MorphoEnvironment */
-fn CreateEnvironment(file) {
+fn createEnvironment(file) {
   try {
     var f = File(file, "w")
     f.close()
@@ -279,7 +284,7 @@ class MorphoConfig {
     return nil 
   }
 
-  _finddefinitions() {
+  _findDefinitions() {
     for (f in defnsFolderLocations) {
       var fnormal = Folder.normalizePath(f)
       if (Folder.isFolder(fnormal)) return fnormal
@@ -292,7 +297,7 @@ class MorphoConfig {
       var path = self.config["@packagedefns"]
       if (Folder.isFolder(path)) return path
     }
-    var defns = self._finddefinitions()
+    var defns = self._findDefinitions()
     if (defns) return defns
     
     ErrMorphoPckgDefns.throw() 
@@ -346,9 +351,9 @@ class MorphoPackageDatabase {
     self.defns = self.load()
   }
 
-  _hasjsonext(file) {
-    var ext = file.split("/.")[-1]
-    return ext=="json"
+  _hasJsonExt(file) {
+    var el = _baseName(file).split(".")
+    return el.count()>1 && el[-1]=="json"
   }
 
   load() {
@@ -356,8 +361,8 @@ class MorphoPackageDatabase {
     var defns = {} 
 
     for (def in defnlist) {
-      if (!self._hasjsonext(def)) continue
-      var p = MorphoPackage("${self.folder}/${def}")
+      if (!self._hasJsonExt(def)) continue
+      var p = MorphoPackage(Folder.normalizePath("${self.folder}/${def}"))
       defns[p.name] = p
     }
 
@@ -494,7 +499,7 @@ class MorphoPackageInstaller {
     // Extract zip contents into a temporary folder 
     if (Folder.isFolder(location)) self._removeFolder(location)
     if (Folder.isFolder(tmp)) self._removeFolder(tmp)
-    try { Folder.create(tmp) } catch { "FldrCrtFld": ErrMorphoPckgFldr.throw() }
+    try { Folder.createRecursive(tmp) } catch { "FldrCrtFld": ErrMorphoPckgFldr.throw() }
 
     self._unzip("${location}.zip", tmp, ErrMorphoPMUnzp)
 
@@ -507,7 +512,7 @@ class MorphoPackageInstaller {
     self._removeFolder(tmp, ErrMorphoPMRmZp)
   }
 
-  _pm() {
+  _packageManager() {
     if (System.platform()=="macos") {
       return "brew"
     } else if (isWindows) {
@@ -517,8 +522,8 @@ class MorphoPackageInstaller {
     }
   }
 
-  _installdep(dep) {
-    var pm = self._pm() 
+  _installDep(dep) {
+    var pm = self._packageManager() 
     if (pm=="brew") {
       print "Using homebrew to install ${dep}"
       systemErrCheck("brew install --quiet ${dep}", ErrMorphoPMDep)
@@ -534,15 +539,15 @@ class MorphoPackageInstaller {
   }
 
   prereq() {
-    var pm = self._pm() 
+    var pm = self._packageManager() 
 
     if (self.package.dependencies &&
       self.package.dependencies.contains(pm)) {
     
       print "Obtaining dependencies for ${self.package.name}"  
       var deps = self.package.dependencies[pm]
-      if (isstring(deps)) self._installdep(deps) 
-      else for (dep in deps) self._installdep(dep) 
+      if (isstring(deps)) self._installDep(deps) 
+      else for (dep in deps) self._installDep(dep) 
     }
   }
 
@@ -552,7 +557,7 @@ class MorphoPackageInstaller {
 
     var bld = "${location}/build"
     if (!Folder.isFolder(bld)) {
-      try { Folder.create(bld) } catch { "FldrCrtFld": ErrMorphoPMCmkFldr.throw() }
+      try { Folder.createRecursive(bld) } catch { "FldrCrtFld": ErrMorphoPMCmkFldr.throw() }
     }
 
     System.setworkingfolder(bld)
@@ -643,8 +648,8 @@ class MorphoPackageManager {
     print "morphopm version                  - displays version information"
   }
 
-  _setdatabase(path) {
-    path = _abspath(path)
+  _setDatabase(path) {
+    path = _absPath(path)
     if (Folder.isFolder(path)) {
       self.config.setPackageDefns(path)
       self.loadDatabase()
@@ -658,7 +663,7 @@ class MorphoPackageManager {
       print "Package ${name} already installed"
     } else if (self.database.contains(name)) {
       var pkg = self.database[name]
-      MorphoPackageInstaller(pkg, self.env).install("${packageFolder}/morpho-${name}")
+      MorphoPackageInstaller(pkg, self.env).install(Folder.normalizePath("${packageFolder}/morpho-${name}"))
       self.config.install(pkg.name, pkg.version)
     } else ErrMorphoPMUnrcgnzdPckg.throw() 
   }
@@ -668,7 +673,7 @@ class MorphoPackageManager {
     if (self.config[name]) {
       if (self.database.contains(name)) {
         var pkg = self.database[name]
-        MorphoPackageInstaller(pkg, self.env).uninstall("${packageFolder}/morpho-${name}")
+        MorphoPackageInstaller(pkg, self.env).uninstall(Folder.normalizePath("${packageFolder}/morpho-${name}"))
         self.config.uninstall(pkg.name)
       } else ErrMorphoPMUnrcgnzdPckg.throw() 
     } else print "Package ${name} is not installed"
@@ -713,7 +718,7 @@ class MorphoPackageManager {
       } else if (args[0]=="version") {
         print _version
       } else if (args[0]=="setdatabase") {
-        self._multi(self._setdatabase, args)
+        self._multi(self._setDatabase, args)
       } else {
         ErrMorphoPMUnrcgnzd.warning()
         self.help() 
@@ -724,15 +729,15 @@ class MorphoPackageManager {
 
 // Ensure the package folder exists 
 if (!Folder.isFolder(packageFolder)) {
-  print "Creating folder `${Folder.normalizePath(packageFolder)}` where morpho packages will be stored."
-  try { Folder.create(packageFolder) } catch { "FldrCrtFld": ErrMorphoPckgFldr.throw() }
+  print "Creating folder `${packageFolder}` where morpho packages will be stored."
+  try { Folder.createRecursive(packageFolder) } catch { "FldrCrtFld": ErrMorphoPckgFldr.throw() }
 }
 
 var env 
 try {
   env = MorphoEnvironment(environmentFile)
 } catch {
-  "FlOpnFld" : env = CreateEnvironment(environmentFile) 
+  "FlOpnFld" : env = createEnvironment(environmentFile) 
 }
 
 var app = MorphoPackageManager(MorphoConfig(configFile),
