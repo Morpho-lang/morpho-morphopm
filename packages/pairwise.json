@@ -1,7 +1,7 @@
 {
     "name" : "pairwise",
-    "version" : "0.0.1",
+    "version" : "1.0.0",
     "git" : "https://github.com/morpho-lang/morpho-pairwise",
-    "url" : "https://github.com/Morpho-lang/morpho-pairwise/archive/refs/heads/main.zip",
+    "url" : "https://github.com/Morpho-lang/morpho-pairwise/archive/refs/tags/v1.0.0.zip",
     "build" : "cmake"
 }

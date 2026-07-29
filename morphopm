@@ -4,15 +4,24 @@
  *  morphopm - a basic package manager for morpho 
  * ===============================================
  *  v0.1.0 - 1/1/25
- *  v0.2.0 - 1/2/26 (Windows support) */
+ *  v0.2.0 - 1/2/26 / 7/8/26
+ *     - Windows support
+ *     - fix unzipping Github archives
+ *     - add cleanup after failed install
+ *     - add setdatabase command to use custom package definitions
+ *     - validate package database folder before loading
+ *  v0.2.1 - 7/28/26
+ *     - merge Windows support with main-line features
+ * =============================================== */
 
-var _version = "0.2.0"
+var _version = "0.2.1"
 
 /* -------------------
  * Error messages 
  * ------------------- */
 
 var ErrMorphoPckgDefns = Error("ErrMorphoPMPckgDefns", "Missing package definitions folder")
+var ErrMorphoPckgFldr = Error("ErrMorphoPMPckgFldr", "Couldn't create package folder")
 var ErrMorphoPMUnrcgnzd = Error("ErrMorphoPMUnrcgnzd", "Unrecognized morphopm command")
 var ErrMorphoPMMssngPckg = Error("ErrMorphoPMMssngPckg", "Missing package name")
 var ErrMorphoPMUnrcgnzdPckg = Error("ErrMorphoPMUnrcgnzdPckg", "Unrecognized package name")
@@ -57,6 +66,21 @@ fn systemErrCheck(String command, Error err) {
   if (system(command)!=0) err.throw() 
 }
 
+/** Returns true if a normalized path is absolute on the current platform */
+fn _isabsolutepath(path) {
+  if (path.count()==0) return false
+  if (path[0]=="/") return true
+  if (path.count()>=2 && path[1]==":") return true
+  return false
+}
+
+/** Resolve a relative path against the current working folder */
+fn _abspath(path) {
+  path = Folder.normalizePath(path)
+  if (_isabsolutepath(path)) return path
+  return Folder.normalizePath("${System.workingfolder()}/${path}")
+}
+
 /** Displays a table */
 fn displayTable(Array a) {
   var b = a.clone() 
@@ -79,7 +103,7 @@ fn displayTable(Array a) {
   for (i in 0...nrows) {
     for (j in 0...ncols) {
       var w = b[i,j].count()
-      for (i in 0...widths[j]-w) out+=" "
+      for (k in 0...widths[j]-w) out+=" "
       out+=b[i,j]+" "
     }
     if (i<nrows-1) out+="\n"
@@ -186,8 +210,7 @@ class MorphoEnvironment {
   }
 
   prnt() {
-    var pkg = self.load() 
-    for (p in pkg) System.prnt(p)
+    for (p in self.packages) System.prnt(p)
   }
 }
 
@@ -265,11 +288,19 @@ class MorphoConfig {
   }
 
   packageDefns() {
-    if (self.isInstalled("@packagedefns")) return self.config["@packagedefns"]
+    if (self.isInstalled("@packagedefns")) {
+      var path = self.config["@packagedefns"]
+      if (Folder.isFolder(path)) return path
+    }
     var defns = self._finddefinitions()
     if (defns) return defns
     
     ErrMorphoPckgDefns.throw() 
+  }
+
+  setPackageDefns(path) {
+    self.config["@packagedefns"] = path
+    self.save() 
   }
 }
 
@@ -373,12 +404,6 @@ class MorphoPackageInstaller {
     self.env = env
   }
 
-  fetch(location) {
-    print "Fetching package ${self.package.name}"
-    // -L -> follow redirects
-    systemErrCheck("curl -L ${self.package.url} -o ${location}.zip", ErrMorphoPMFtch)
-  }
-
   _unzip(src, dest, err) {
     var nsrc = Folder.normalizePath(src), ndest = Folder.normalizePath(dest)
     if (isWindows) systemErrCheck("tar -xf ${nsrc} -C ${ndest}", err)
@@ -393,22 +418,68 @@ class MorphoPackageInstaller {
     } else systemErrCheck("mv -f ${src} ${dest}", err)
   }
 
-  _removeFile(file, err) {
+  _removeFile(file, err=nil) {
     if (isWindows) {
-      systemErrCheck("del /f /q ${Folder.normalizePath(file)} >nul 2>&1", err)
-    } else systemErrCheck("rm ${file}", err)
+      var cmd = "del /f /q ${Folder.normalizePath(file)} >nul 2>&1"
+      if (err) systemErrCheck(cmd, err) else system(cmd)
+    } else {
+      if (err) systemErrCheck("rm ${file}", err) else system("rm -f ${file}")
+    }
   }
 
-  _removeFolder(folder) {
+  // If err is provided, failures raise that error; otherwise best-effort.
+  _removeFolder(folder, err=nil) {
     if (isWindows) {
-      system("rmdir /s /q ${Folder.normalizePath(folder)}")
-    } else system("rm -r ${folder}")
+      var cmd = "rmdir /s /q ${Folder.normalizePath(folder)}"
+      if (err) systemErrCheck(cmd, err) else system(cmd)
+    } else {
+      if (err) systemErrCheck("rm -r ${folder}", err) else system("rm -r ${folder}")
+    }
   }
 
-  _removeFolder(folder, err) {
-    if (isWindows) {
-      systemErrCheck("rmdir /s /q ${Folder.normalizePath(folder)}", err)
-    } else systemErrCheck("rm -r ${folder}", err)
+  // Remove partial install artifacts after a failed install. Best-effort: errors
+  // are ignored so cleanup itself does not mask the original failure.
+  _cleanupFailedInstall(location) {
+    print "Cleaning up failed install of ${self.package.name}"
+    self.deactivate(location)
+    var tmp = "${location}-tmp"
+    if (Folder.isFolder(tmp)) self._removeFolder(tmp)
+    self._removeFile("${location}.zip")
+    if (Folder.isFolder(location)) self._removeFolder(location)
+  }
+
+  _recover(location, err) {
+    self._cleanupFailedInstall(location)
+    err.throw()
+  }
+
+  fetch(location) {
+    print "Fetching package ${self.package.name}"
+    // -L -> follow redirects
+    systemErrCheck("curl -L ${self.package.url} -o ${location}.zip", ErrMorphoPMFtch)
+  }
+
+  // GitHub archives unpack into a single top-level folder whose name depends
+  // on the ref: branch zips use morpho-<name>-main, while tag zips use
+  // morpho-<name>-<version> (or morpho-<name>-v<version>). Discover the
+  // folder rather than assuming a fixed name.
+  _findArchiveRoot(tmp) {
+    var name = self.package.name
+    var version = self.package.version
+    var candidates = [ "morpho-${name}-main",
+                       "morpho-${name}-${version}",
+                       "morpho-${name}-v${version}" ]
+
+    for (c in candidates) {
+      if (Folder.isFolder("${tmp}/${c}")) return c
+    }
+
+    // Fallback: use the first subdirectory in the archive
+    for (item in Folder.contents(tmp)) {
+      if (Folder.isFolder("${tmp}/${item}")) return item
+    }
+
+    ErrMorphoPMUnzp.throw()
   }
 
   unzip(location) {
@@ -416,20 +487,19 @@ class MorphoPackageInstaller {
     print "Unzipping package ${self.package.name}"
 
     // Extract zip contents into a temporary folder 
-    if (Folder.isFolder(location)) _removeFolder(location) //system("rm -r ${location}")
-    if (!Folder.isFolder(tmp)) Folder.create(tmp)
-    
-    _unzip("${location}.zip", tmp, ErrMorphoPMUnzp)
+    if (Folder.isFolder(location)) self._removeFolder(location)
+    if (Folder.isFolder(tmp)) self._removeFolder(tmp)
+    try { Folder.create(tmp) } catch { "FldrCrtFld": ErrMorphoPckgFldr.throw() }
 
-    var entries = Folder.contents(tmp) 
-    var subfldr = entries[0] // Expect a single folder included in the zip
+    self._unzip("${location}.zip", tmp, ErrMorphoPMUnzp)
 
     // Move the contents of the temporary folder into the proper place
-    _move("${tmp}/${subfldr}", location, ErrMorphoPMUnzp)
-    
+    var subfldr = self._findArchiveRoot(tmp)
+    self._move("${tmp}/${subfldr}", location, ErrMorphoPMUnzp)
+
     // Cleanup 
-    _removeFile("${location}.zip", ErrMorphoPMRmZp)
-    _removeFolder(tmp, ErrMorphoPMRmZp)
+    self._removeFile("${location}.zip", ErrMorphoPMRmZp)
+    self._removeFolder(tmp, ErrMorphoPMRmZp)
   }
 
   _pm() {
@@ -477,7 +547,7 @@ class MorphoPackageInstaller {
 
     var bld = "${location}/build"
     if (!Folder.isFolder(bld)) {
-        try { Folder.create(bld) } catch { "FldrCrtFld": ErrMorphoPMCmkFldr.throw() }
+      try { Folder.create(bld) } catch { "FldrCrtFld": ErrMorphoPMCmkFldr.throw() }
     }
 
     System.setworkingfolder(bld)
@@ -486,7 +556,7 @@ class MorphoPackageInstaller {
     if (isWindows && system("ninja --version >nul 2>&1")==0) gen = "-G Ninja" // Use ninja on windows if available
 
     systemErrCheck(
-        "cmake ${gen} -DCMAKE_RULE_MESSAGES=OF-DCMAKE_INSTALL_PREFIX=\"${location}\" -DCMAKE_BUILD_TYPE=Release ..",
+        "cmake ${gen} -DCMAKE_RULE_MESSAGES=OFF -DCMAKE_INSTALL_PREFIX=\"${location}\" -DCMAKE_BUILD_TYPE=Release ..",
         ErrMorphoPMCmk
     )
 
@@ -514,11 +584,21 @@ class MorphoPackageInstaller {
   install(location) {
     var loc = Folder.normalizePath(location)
     print "Installing package ${self.package.name}"  
-    self.prereq() 
-    self.fetch(loc) 
-    self.unzip(loc) 
-    self.build(loc) 
-    self.activate(loc) 
+    try {
+      self.prereq() 
+      self.fetch(loc) 
+      self.unzip(loc) 
+      self.build(loc) 
+      self.activate(loc)
+    } catch {
+      "ErrMorphoPMDep": self._recover(loc, ErrMorphoPMDep)
+      "ErrMorphoPMFtch": self._recover(loc, ErrMorphoPMFtch)
+      "ErrMorphoPMPckgFldr": self._recover(loc, ErrMorphoPckgFldr)
+      "ErrMorphoPMUnzp": self._recover(loc, ErrMorphoPMUnzp)
+      "ErrMorphoPMRmZp": self._recover(loc, ErrMorphoPMRmZp)
+      "ErrMorphoPMCmkFldr": self._recover(loc, ErrMorphoPMCmkFldr)
+      "ErrMorphoPMCmk": self._recover(loc, ErrMorphoPMCmk)
+    }
   }
 
   uninstall(location) {
@@ -526,20 +606,24 @@ class MorphoPackageInstaller {
     self.deactivate(loc) 
     print "Uninstalling package ${self.package.name}"
     if (Folder.isFolder(loc)) {
-      _removeFolder(loc, ErrMorphoPMRmPckg)
+      self._removeFolder(loc, ErrMorphoPMRmPckg)
     }
   }
 }
 
 /* ----------------------
- * MorphoPackageDatabase 
+ * MorphoPackageManager 
  * ---------------------- */
 
 class MorphoPackageManager {
   init(config, env) {
     self.config = config 
-    self.database = MorphoPackageDatabase(self.config.packageDefns())
     self.env = env 
+    self.loadDatabase()
+  }
+
+  loadDatabase() {
+    self.database = MorphoPackageDatabase(self.config.packageDefns())
   }
 
   help() {
@@ -550,10 +634,21 @@ class MorphoPackageManager {
     print "morphopm list                     - lists available packages"
     print "morphopm uninstall <packagename>  - uninstalls a package"
     print "morphopm upgrade <packagename>    - upgrades a package to the latest version"
+    print "morphopm setdatabase <path>       - use a custom package definitions folder"
     print "morphopm version                  - displays version information"
   }
 
+  _setdatabase(path) {
+    path = _abspath(path)
+    if (Folder.isFolder(path)) {
+      self.config.setPackageDefns(path)
+      self.loadDatabase()
+      print "Package database set to ${path}"
+    } else ErrMorphoPckgDefns.throw()
+  }
+
   install(name) {
+    self.loadDatabase()
     if (self.config[name]) {
       print "Package ${name} already installed"
     } else if (self.database.contains(name)) {
@@ -564,6 +659,7 @@ class MorphoPackageManager {
   }
 
   uninstall(name) {
+    self.loadDatabase()
     if (self.config[name]) {
       if (self.database.contains(name)) {
         var pkg = self.database[name]
@@ -574,6 +670,7 @@ class MorphoPackageManager {
   }
 
   upgrade(name) { 
+    self.loadDatabase()
     if (!self.database.contains(name)) ErrMorphoPMUnrcgnzdPckg.throw() 
 
     if (self.config[name]) {
@@ -605,10 +702,13 @@ class MorphoPackageManager {
       } else if (args[0]=="upgrade") {
         self._multi(self.upgrade, args) 
       } else if (args[0]=="list") {
+        self.loadDatabase()
         print "morphopm available packages: (${checkMark}=installed; ${upArrow} =upgrade available)"
         self.database.list(config=self.config) 
       } else if (args[0]=="version") {
         print _version
+      } else if (args[0]=="setdatabase") {
+        self._multi(self._setdatabase, args)
       } else {
         ErrMorphoPMUnrcgnzd.warning()
         self.help() 
@@ -620,7 +720,7 @@ class MorphoPackageManager {
 // Ensure the package folder exists 
 if (!Folder.isFolder(packageFolder)) {
   print "Creating folder `${Folder.normalizePath(packageFolder)}` where morpho packages will be stored."
-  Folder.create(packageFolder)
+  try { Folder.create(packageFolder) } catch { "FldrCrtFld": ErrMorphoPckgFldr.throw() }
 }
 
 var env 
