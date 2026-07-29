@@ -418,23 +418,28 @@ class MorphoPackageInstaller {
     } else systemErrCheck("mv -f ${src} ${dest}", err)
   }
 
-  _removeFile(file, err=nil) {
+  _removeFile(file) {
     if (isWindows) {
-      var cmd = "del /f /q ${Folder.normalizePath(file)} >nul 2>&1"
-      if (err) systemErrCheck(cmd, err) else system(cmd)
-    } else {
-      if (err) systemErrCheck("rm ${file}", err) else system("rm -f ${file}")
-    }
+      system("del /f /q ${Folder.normalizePath(file)} >nul 2>&1")
+    } else system("rm -f ${file}")
   }
 
-  // If err is provided, failures raise that error; otherwise best-effort.
-  _removeFolder(folder, err=nil) {
+  _removeFile(file, err) {
     if (isWindows) {
-      var cmd = "rmdir /s /q ${Folder.normalizePath(folder)}"
-      if (err) systemErrCheck(cmd, err) else system(cmd)
-    } else {
-      if (err) systemErrCheck("rm -r ${folder}", err) else system("rm -r ${folder}")
-    }
+      systemErrCheck("del /f /q ${Folder.normalizePath(file)} >nul 2>&1", err)
+    } else systemErrCheck("rm ${file}", err)
+  }
+
+  _removeFolder(folder) {
+    if (isWindows) {
+      system("rmdir /s /q ${Folder.normalizePath(folder)}")
+    } else system("rm -r ${folder}")
+  }
+
+  _removeFolder(folder, err) {
+    if (isWindows) {
+      systemErrCheck("rmdir /s /q ${Folder.normalizePath(folder)}", err)
+    } else systemErrCheck("rm -r ${folder}", err)
   }
 
   // Remove partial install artifacts after a failed install. Best-effort: errors
