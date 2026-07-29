@@ -499,7 +499,7 @@ class MorphoPackageInstaller {
     // Extract zip contents into a temporary folder 
     if (Folder.isFolder(location)) self._removeFolder(location)
     if (Folder.isFolder(tmp)) self._removeFolder(tmp)
-    try { Folder.createRecursive(tmp) } catch { "FldrCrtFld": ErrMorphoPckgFldr.throw() }
+    try { Folder.create(tmp) } catch { "FldrCrtFld": ErrMorphoPckgFldr.throw() }
 
     self._unzip("${location}.zip", tmp, ErrMorphoPMUnzp)
 
@@ -557,7 +557,7 @@ class MorphoPackageInstaller {
 
     var bld = "${location}/build"
     if (!Folder.isFolder(bld)) {
-      try { Folder.createRecursive(bld) } catch { "FldrCrtFld": ErrMorphoPMCmkFldr.throw() }
+      try { Folder.create(bld) } catch { "FldrCrtFld": ErrMorphoPMCmkFldr.throw() }
     }
 
     System.setworkingfolder(bld)
@@ -730,7 +730,7 @@ class MorphoPackageManager {
 // Ensure the package folder exists 
 if (!Folder.isFolder(packageFolder)) {
   print "Creating folder `${packageFolder}` where morpho packages will be stored."
-  try { Folder.createRecursive(packageFolder) } catch { "FldrCrtFld": ErrMorphoPckgFldr.throw() }
+  try { Folder.create(packageFolder) } catch { "FldrCrtFld": ErrMorphoPckgFldr.throw() }
 }
 
 var env 
