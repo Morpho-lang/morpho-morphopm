@@ -28,6 +28,14 @@ Update a package to the latest version:
 
     morphopm upgrade <packagename>
 
+Get the install path of a package:
+
+    morphopm path <packagename>
+
+Open a package's install folder in the file manager:
+
+    morphopm open <packagename>
+
 ## Preparing your own packages
 
 Packages must be hosted in a public git repository, e.g. on Github, and are defined to morphopm by a simple JSON file (see the packages folder in this repository for examples). Contributions of external packages are welcome; please fork this repository and make a Pull Request containing your package definition file in the packages folder.

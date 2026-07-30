@@ -11,9 +11,12 @@
  *     - validate package database folder before loading
  *  v0.2.1 - 7/28/26
  *     - Windows support
+ *  v0.2.2 - 7/30/26
+ *     - add path command to print a package's install directory
+ *     - add open command to reveal a package's install directory
  * =============================================== */
 
-var _version = "0.2.1"
+var _version = "0.2.2"
 
 /* -------------------
  * Error messages 
@@ -24,6 +27,8 @@ var ErrMorphoPckgFldr = Error("ErrMorphoPMPckgFldr", "Couldn't create package fo
 var ErrMorphoPMUnrcgnzd = Error("ErrMorphoPMUnrcgnzd", "Unrecognized morphopm command")
 var ErrMorphoPMMssngPckg = Error("ErrMorphoPMMssngPckg", "Missing package name")
 var ErrMorphoPMUnrcgnzdPckg = Error("ErrMorphoPMUnrcgnzdPckg", "Unrecognized package name")
+var ErrMorphoPMNotInst = Error("ErrMorphoPMNotInst", "Package is not installed")
+var ErrMorphoPMOpen = Error("ErrMorphoPMOpen", "Couldn't open package folder")
 var ErrMorphoPMFtch = Error("ErrMorphoPMFtch", "Couldn't fetch package file")
 var ErrMorphoPMUnzp = Error("ErrMorphoPMUnzp", "Couldn't unzip package file")
 var ErrMorphoPMRmZp = Error("ErrMorphoPMRmZp", "Couldn't remove package zip file")
@@ -642,6 +647,8 @@ class MorphoPackageManager {
     print "morphopm help                     - displays this help message" 
     print "morphopm install <packagename>    - installs a package"
     print "morphopm list                     - lists available packages"
+    print "morphopm open <packagename>       - opens the install folder of a package"
+    print "morphopm path <packagename>       - prints the install path of a package"
     print "morphopm uninstall <packagename>  - uninstalls a package"
     print "morphopm upgrade <packagename>    - upgrades a package to the latest version"
     print "morphopm setdatabase <path>       - use a custom package definitions folder"
@@ -663,7 +670,7 @@ class MorphoPackageManager {
       print "Package ${name} already installed"
     } else if (self.database.contains(name)) {
       var pkg = self.database[name]
-      MorphoPackageInstaller(pkg, self.env).install(Folder.normalizePath("${packageFolder}/morpho-${name}"))
+      MorphoPackageInstaller(pkg, self.env).install(self._packageLocation(name))
       self.config.install(pkg.name, pkg.version)
     } else ErrMorphoPMUnrcgnzdPckg.throw() 
   }
@@ -673,10 +680,38 @@ class MorphoPackageManager {
     if (self.config[name]) {
       if (self.database.contains(name)) {
         var pkg = self.database[name]
-        MorphoPackageInstaller(pkg, self.env).uninstall(Folder.normalizePath("${packageFolder}/morpho-${name}"))
+        MorphoPackageInstaller(pkg, self.env).uninstall(self._packageLocation(name))
         self.config.uninstall(pkg.name)
       } else ErrMorphoPMUnrcgnzdPckg.throw() 
-    } else print "Package ${name} is not installed"
+    } else ErrMorphoPMNotInst.throw("Package ${name} is not installed")
+  }
+
+  _packageLocation(name) {
+    return Folder.normalizePath("${packageFolder}/morpho-${name}")
+  }
+
+  _requireInstalled(name) {
+    if (!self.config[name]) ErrMorphoPMNotInst.throw("Package ${name} is not installed")
+    return self._packageLocation(name)
+  }
+
+  _openFolder(location) {
+    if (System.platform()=="macos") {
+      systemErrCheck("open ${location}", ErrMorphoPMOpen)
+    } else if (isWindows) {
+      // explorer often returns non-zero even on success; Invoke-Item reports failures reliably
+      systemErrCheck("powershell -Command \"Invoke-Item -LiteralPath '${Folder.normalizePath(location)}'\"", ErrMorphoPMOpen)
+    } else {
+      systemErrCheck("xdg-open ${location}", ErrMorphoPMOpen)
+    }
+  }
+
+  path(name) {
+    print self._requireInstalled(name)
+  }
+
+  open(name) {
+    self._openFolder(self._requireInstalled(name))
   }
 
   upgrade(name) { 
@@ -692,7 +727,7 @@ class MorphoPackageManager {
         self.uninstall(name)
         self.install(name)
       } else print "Package ${name} is already up-to-date."
-    } else print "Package ${name} is not installed"
+    } else ErrMorphoPMNotInst.throw("Package ${name} is not installed")
   }
 
   _multi(func, args) {
@@ -715,6 +750,10 @@ class MorphoPackageManager {
         self.loadDatabase()
         print "morphopm available packages: (${checkMark}=installed; ${upArrow} =upgrade available)"
         self.database.list(config=self.config) 
+      } else if (args[0]=="path") {
+        self._multi(self.path, args)
+      } else if (args[0]=="open") {
+        self._multi(self.open, args)
       } else if (args[0]=="version") {
         print _version
       } else if (args[0]=="setdatabase") {
