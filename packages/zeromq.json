@@ -1,8 +1,8 @@
 {
     "name" : "zeromq",
-    "version" : "0.1.0",
+    "version" : "0.7.0",
     "git" : "https://github.com/morpho-lang/morpho-zeromq",
-    "url" : "https://github.com/Morpho-lang/morpho-zeromq/archive/refs/heads/main.zip",
+    "url" : "https://github.com/Morpho-lang/morpho-zeromq/archive/refs/tags/v0.7.0.zip",
     "build" : "cmake",
     "dependencies" : { "apt" : "libczmq-dev", "brew": "czmq" }
 }
