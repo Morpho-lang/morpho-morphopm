@@ -17,6 +17,7 @@
  *  v0.3.0 - 9/26/26
  *     - add requires field to package definitions
  *     - install required packages before the requested package
+ *     - refuse to uninstall a package required by another installed package
  *     - list packages in alphabetical order
  *     - check morphomin and morphomax against morpho6 --version
  *     - add devinstall, which git clones a package (skips version checks for it)
@@ -42,6 +43,7 @@ var ErrMorphoPMRmZp = Error("ErrMorphoPMRmZp", "Couldn't remove package zip file
 var ErrMorphoPMRmPckg = Error("ErrMorphoPMRmPckg", "Couldn't remove package file")
 var ErrMorphoPMDep = Error("ErrMorphoPMDep", "Couldn't install package dependency")
 var ErrMorphoPMReq = Error("ErrMorphoPMReq", "Package requirement is not satisfied")
+var ErrMorphoPMInUse = Error("ErrMorphoPMInUse", "Package is required by another installed package")
 var ErrMorphoPMReqCycle = Error("ErrMorphoPMReqCycle", "Package requirements contain a cycle")
 var ErrMorphoPMCmkFldr = Error("ErrMorphoPMCmkFldr", "Couldn't make build folder for CMake")
 var ErrMorphoPMCmk = Error("ErrMorphoPMCmk", "CMake Err")
@@ -431,6 +433,15 @@ class MorphoConfig {
       self.config.remove(package)
       self.save() 
     }
+  }
+
+  /** Installed package names, leaving out configuration keys such as @packagemanager. */
+  installedPackages() {
+    var names = []
+    for (key in self.config.keys()) {
+      if (key.count()>0 && key[0]!="@") names.append(key)
+    }
+    return names
   } 
 
   index(package) { 
@@ -605,13 +616,13 @@ class MorphoPackageInstaller {
   _removeFolder(folder) {
     if (isWindows) {
       system("rmdir /s /q ${Folder.normalizePath(folder)}")
-    } else system("rm -r ${folder}")
+    } else system("rm -rf ${folder}")
   }
 
   _removeFolder(folder, err) {
     if (isWindows) {
       systemErrCheck("rmdir /s /q ${Folder.normalizePath(folder)}", err)
-    } else systemErrCheck("rm -r ${folder}", err)
+    } else systemErrCheck("rm -rf ${folder}", err)
   }
 
   // Remove partial install artifacts after a failed install. Best-effort: errors
@@ -857,7 +868,7 @@ class MorphoPackageManager {
     } else if (mustUpgrade && self._isDev(name)) {
       ErrMorphoPMDevUp.warning("Package ${name} is a dev install; cd to the package folder and run 'git pull' to update it.")
     } else if (mustUpgrade) {
-      self.uninstall(name)
+      self._remove(name)
       self._installBody(name)
     }
   }
@@ -874,7 +885,7 @@ class MorphoPackageManager {
       ErrMorphoPMOutdtd.throw("Your copy of morpho (version ${current.toString()}) is too old for this package: version ${pkg.morphomin} is required")
     }
     if (pkg.morphomax && current.gt(Version(pkg.morphomax))) {
-      ErrMorphoPMTooNew.throw("Your copy of morpho (version ${current.toString()}) is too new for this package: version ${pkg.morphomin} is required")
+      ErrMorphoPMTooNew.throw("Your copy of morpho (version ${current.toString()}) is too new for this package: version ${pkg.morphomax} is the newest supported")
     }
   }
 
@@ -913,13 +924,39 @@ class MorphoPackageManager {
 
   uninstall(name) {
     self.loadDatabase()
-    if (self.config[name]) {
-      if (self.database.contains(name)) {
-        var pkg = self.database[name]
-        MorphoPackageInstaller(pkg, self.env, self.config.packagemanager).uninstall(self._packageLocation(name))
-        self.config.uninstall(pkg.name)
-      } else ErrMorphoPMUnrcgnzdPckg.throw() 
-    } else ErrMorphoPMNotInst.throw("Package ${name} is not installed")
+    if (!self.config[name]) ErrMorphoPMNotInst.throw("Package ${name} is not installed")
+    var users = self._requiredBy(name)
+    if (users.count()>0) ErrMorphoPMInUse.throw("Package ${name} is required by ${self._join(users)}")
+    self._remove(name)
+  }
+
+  /** Installed packages whose requires field names this package. */
+  _requiredBy(name) {
+    var users = []
+    for (pkg in self.config.installedPackages()) {
+      if (pkg==name || !self.database.contains(pkg)) continue
+      var req = self.database[pkg].requires
+      if (req && req.contains(name)) users.append(pkg)
+    }
+    users.sort()
+    return users
+  }
+
+  _join(items) {
+    var text = ""
+    for (item in items) {
+      if (text.count()>0) text = "${text}, ${item}"
+      else text = item
+    }
+    return text
+  }
+
+  _remove(name) {
+    if (self.database.contains(name)) {
+      var pkg = self.database[name]
+      MorphoPackageInstaller(pkg, self.env, self.config.packagemanager).uninstall(self._packageLocation(name))
+      self.config.uninstall(pkg.name)
+    } else ErrMorphoPMUnrcgnzdPckg.throw()
   }
 
   _packageLocation(name) {
