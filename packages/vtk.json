@@ -1,0 +1,6 @@
+{
+    "name" : "vtk",
+    "version" : "1.0.0",
+    "git" : "https://github.com/morpho-lang/morpho-vtk",
+    "url" : "https://github.com/Morpho-lang/morpho-vtk/archive/refs/tags/v1.0.0.zip"
+}
