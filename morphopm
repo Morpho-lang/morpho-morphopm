@@ -18,6 +18,7 @@
  *     - add requires field to package definitions
  *     - install required packages before the requested package
  *     - list packages in alphabetical order
+ *     - check morphomin and morphomax against morpho6 --version
  * =============================================== */
 
 var _version = "0.2.3"
@@ -44,6 +45,8 @@ var ErrMorphoPMCmkFldr = Error("ErrMorphoPMCmkFldr", "Couldn't make build folder
 var ErrMorphoPMCmk = Error("ErrMorphoPMCmk", "CMake Err")
 var ErrMorphoDupPkg = Error("ErrMorphoDupPkg", "Morpho environment contains a duplicate package")
 var ErrMorphoVrsnPrse = Error("ErrMorphoVrsnPrse", "Incorrectly formatted version string")
+var ErrMorphoPMOutdtd = Error("ErrMorphoPMOutdtd", "Your copy of morpho is too outdated to upgrade this package")
+var ErrMorphoPMTooNew = Error("ErrMorphoPMTooNew", "Your copy of morpho is too new for this package")
 var ErrMorphoEnv = Error("ErrMorphoEnv", "Couldn't create environment file")
 
 /* -------------------
@@ -208,6 +211,17 @@ class VersionConstraint {
   }
 }
 
+/** Version reported by `morpho6 --version`, which prints "Morpho vX.Y.Z". */
+var _morphoVersion = nil
+fn currentMorphoVersion() {
+  if (_morphoVersion) return _morphoVersion
+  var result = System.subprocess("morpho6 --version")
+  if (result["exitstatus"] != 0) ErrMorphoVrsnPrse.throw()
+  var parts = result["stdout"].split("v")
+  _morphoVersion = Version(parts[-1])
+  return _morphoVersion
+}
+
 /* -------------------
  * MorphoEnvironment 
  * ------------------- */
@@ -360,7 +374,7 @@ class MorphoConfig {
  * MorphoPackage 
  * ------------------- */
 
-var _props = ("name", "version", "git", "url", "build", "dependencies", "requires")
+var _props = ("name", "version", "git", "url", "build", "dependencies", "requires", "morphomin", "morphomax")
 
 class MorphoPackage {
   init(filename) {
@@ -728,6 +742,7 @@ class MorphoPackageManager {
     next.append(name)
 
     var pkg = self.database[name]
+    self._checkMorphoVersion(pkg)
     self._satisfyRequires(pkg, next)
 
     if (!self.config.isInstalled(name)) {
@@ -735,6 +750,18 @@ class MorphoPackageManager {
     } else if (mustUpgrade) {
       self.uninstall(name)
       self._installBody(name)
+    }
+  }
+
+  // morphomin and morphomax are inclusive bounds on the running morpho version.
+  _checkMorphoVersion(pkg) {
+    if (!pkg.morphomin && !pkg.morphomax) return
+    var current = currentMorphoVersion()
+    if (pkg.morphomin && Version(pkg.morphomin).gt(current)) {
+      ErrMorphoPMOutdtd.throw("Your copy of morpho (version ${current.toString()}) is too old for this package: version ${pkg.morphomin} is required")
+    }
+    if (pkg.morphomax && current.gt(Version(pkg.morphomax))) {
+      ErrMorphoPMTooNew.throw("Your copy of morpho (version ${current.toString()}) is too new for this package: version ${pkg.morphomin} is required")
     }
   }
 
