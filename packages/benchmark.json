@@ -2,5 +2,6 @@
     "name" : "benchmark",
     "version" : "1.0.0",
     "git" : "https://github.com/morpho-lang/morpho-benchmark",
-    "url" : "https://github.com/Morpho-lang/morpho-benchmark/archive/refs/tags/v1.0.0.zip"
+    "url" : "https://github.com/Morpho-lang/morpho-benchmark/archive/refs/tags/v1.0.0.zip",
+    "requires" : { "optimize4" : ">=0.5.1" }
 }
