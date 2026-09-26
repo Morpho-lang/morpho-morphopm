@@ -164,6 +164,10 @@ class Version {
   prnt() {
     System.prnt("${self.major}.${self.minor}.${self.patch}")
   }
+
+  str() {
+    return "${self.major}.${self.minor}.${self.patch}"
+  }
 }
 
 /* -------------------
@@ -723,7 +727,7 @@ class MorphoPackageManager {
       var vLatest = Version(self.database[name].version)
 
       if (vLatest.gt(vInstalled)) {
-        print "Upgrading package ${name} to version ${vLatest}."
+        print "Upgrading package ${name} to version ${vLatest.str()}."
         self.uninstall(name)
         self.install(name)
       } else print "Package ${name} is already up-to-date."
