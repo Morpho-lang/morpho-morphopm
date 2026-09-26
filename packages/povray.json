@@ -1,0 +1,8 @@
+{
+    "name" : "povray",
+    "version" : "1.0.0",
+    "git" : "https://github.com/Morpho-lang/morpho-povray",
+    "url" : "https://github.com/Morpho-lang/morpho-povray/archive/refs/tags/v1.0.0.zip",
+    "build" : "cmake",
+    "dependencies" : { "apt" : "povray", "brew": "povray" }
+}
