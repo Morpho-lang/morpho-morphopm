@@ -14,9 +14,13 @@
  *  v0.2.2 - 7/30/26
  *     - add path command to print a package's install directory
  *     - add open command to reveal a package's install directory
+ *  v0.2.3 - 9/26/26
+ *     - add requires field to package definitions
+ *     - install required packages before the requested package
+ *     - list packages in alphabetical order
  * =============================================== */
 
-var _version = "0.2.2"
+var _version = "0.2.3"
 
 /* -------------------
  * Error messages 
@@ -34,6 +38,8 @@ var ErrMorphoPMUnzp = Error("ErrMorphoPMUnzp", "Couldn't unzip package file")
 var ErrMorphoPMRmZp = Error("ErrMorphoPMRmZp", "Couldn't remove package zip file")
 var ErrMorphoPMRmPckg = Error("ErrMorphoPMRmPckg", "Couldn't remove package file")
 var ErrMorphoPMDep = Error("ErrMorphoPMDep", "Couldn't install package dependency")
+var ErrMorphoPMReq = Error("ErrMorphoPMReq", "Package requirement is not satisfied")
+var ErrMorphoPMReqCycle = Error("ErrMorphoPMReqCycle", "Package requirements contain a cycle")
 var ErrMorphoPMCmkFldr = Error("ErrMorphoPMCmkFldr", "Couldn't make build folder for CMake")
 var ErrMorphoPMCmk = Error("ErrMorphoPMCmk", "CMake Err")
 var ErrMorphoDupPkg = Error("ErrMorphoDupPkg", "Morpho environment contains a duplicate package")
@@ -161,12 +167,44 @@ class Version {
     return false 
   }
 
-  prnt() {
-    System.prnt("${self.major}.${self.minor}.${self.patch}")
+  ge(Version v) {
+    return self.eq(v) || self.gt(v)
   }
 
-  str() {
+  toString() {
     return "${self.major}.${self.minor}.${self.patch}"
+  }
+
+  prnt() {
+    System.prnt(self.toString())
+  }
+}
+
+/* A requirement is empty (any version), ">=X.Y.Z", or an exact "X.Y.Z". */
+class VersionConstraint {
+  init(str) {
+    self.kind = "any"
+    self.version = nil
+    if (!isstring(str) || str.count()==0) return
+    if (str.count()>=2 && str.substring(0, 2)==">=") {
+      self.kind = "ge"
+      self.version = Version(str.substring(2, str.count()))
+    } else {
+      self.kind = "eq"
+      self.version = Version(str)
+    }
+  }
+
+  satisfied(Version v) {
+    if (self.kind=="any") return true
+    if (self.kind=="ge") return v.ge(self.version)
+    return v.eq(self.version)
+  }
+
+  toString() {
+    if (self.kind=="any") return "any"
+    if (self.kind=="ge") return ">=${self.version.toString()}"
+    return self.version.toString()
   }
 }
 
@@ -322,7 +360,7 @@ class MorphoConfig {
  * MorphoPackage 
  * ------------------- */
 
-var _props = ("name", "version", "git", "url", "build", "dependencies")
+var _props = ("name", "version", "git", "url", "build", "dependencies", "requires")
 
 class MorphoPackage {
   init(filename) {
@@ -397,9 +435,12 @@ class MorphoPackageDatabase {
   }
 
   list(config=nil) {
-    var table = []
+    var names = []
+    for (key in self.defns.keys()) names.append(key)
+    names.sort()
 
-    for (key, k in self.defns.keys()) {
+    var table = []
+    for (key in names) {
       var current = self.defns[key].version
       table.append([key, "(${current})", self._status(config, key, current)])
     }
@@ -673,10 +714,60 @@ class MorphoPackageManager {
     if (self.config[name]) {
       print "Package ${name} already installed"
     } else if (self.database.contains(name)) {
-      var pkg = self.database[name]
-      MorphoPackageInstaller(pkg, self.env).install(self._packageLocation(name))
-      self.config.install(pkg.name, pkg.version)
+      self._ensure(name, [], false)
     } else ErrMorphoPMUnrcgnzdPckg.throw() 
+  }
+
+  // Install name after its requirements. mustUpgrade reinstalls an older copy
+  // once those requirements are satisfied. stack is the chain already being resolved.
+  _ensure(name, stack, mustUpgrade) {
+    if (stack.contains(name)) ErrMorphoPMReqCycle.throw("Package requirement cycle involving ${name}")
+
+    var next = []
+    for (item in stack) next.append(item)
+    next.append(name)
+
+    var pkg = self.database[name]
+    self._satisfyRequires(pkg, next)
+
+    if (!self.config.isInstalled(name)) {
+      self._installBody(name)
+    } else if (mustUpgrade) {
+      self.uninstall(name)
+      self._installBody(name)
+    }
+  }
+
+  _installBody(name) {
+    var pkg = self.database[name]
+    MorphoPackageInstaller(pkg, self.env).install(self._packageLocation(name))
+    self.config.install(pkg.name, pkg.version)
+  }
+
+  _satisfyRequires(pkg, stack) {
+    if (!pkg.requires) return
+
+    for (dep in pkg.requires.keys()) {
+      if (!self.database.contains(dep)) ErrMorphoPMUnrcgnzdPckg.throw("Package ${pkg.name} requires ${dep}")
+      if (stack.contains(dep)) ErrMorphoPMReqCycle.throw("${pkg.name} requires ${dep}, which is already being installed")
+
+      var constraint = VersionConstraint(pkg.requires[dep])
+      var published = Version(self.database[dep].version)
+      if (!constraint.satisfied(published)) ErrMorphoPMReq.throw("Package ${pkg.name} requires ${dep} ${constraint.toString()}, but version ${published.toString()} is available")
+
+      if (!self.config.isInstalled(dep)) { // If not installed, install it
+        print "Installing ${dep}, required by ${pkg.name}"
+        self._ensure(dep, stack, false)
+      } else { // If installed, check if it satisfies the requirement
+        var installed = Version(self.config[dep])
+        if (!constraint.satisfied(installed)) {
+          if (published.gt(installed)) { // If the published version is greater, upgrade it
+            print "Upgrading ${dep} to version ${published.toString()}, required by ${pkg.name}"
+            self._ensure(dep, stack, true)
+          } else ErrMorphoPMReq.throw("Package ${pkg.name} requires ${dep} ${constraint.toString()}, but version ${installed.toString()} is installed") // If the installed version is greater, throw an error
+        }
+      }
+    }
   }
 
   uninstall(name) {
@@ -727,9 +818,8 @@ class MorphoPackageManager {
       var vLatest = Version(self.database[name].version)
 
       if (vLatest.gt(vInstalled)) {
-        print "Upgrading package ${name} to version ${vLatest.str()}."
-        self.uninstall(name)
-        self.install(name)
+        print "Upgrading package ${name} to version ${vLatest.toString()}."
+        self._ensure(name, [], true)
       } else print "Package ${name} is already up-to-date."
     } else ErrMorphoPMNotInst.throw("Package ${name} is not installed")
   }

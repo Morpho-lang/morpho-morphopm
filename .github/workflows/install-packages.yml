@@ -18,7 +18,7 @@ jobs:
         # Morpho / morpho-cli build deps
         sudo apt install -y libsuitesparse-dev liblapacke-dev libunistring-dev
         # Package apt deps (morphopm calls apt-get without -y; preinstall so install is a no-op)
-        sudo apt install -y libcurl4-openssl-dev libczmq-dev unzip
+        sudo apt install -y libcurl4-openssl-dev libczmq-dev unzip ffmpeg povray
 
     - name: Build and install Morpho
       run: |
