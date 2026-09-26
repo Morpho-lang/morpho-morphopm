@@ -20,6 +20,7 @@
  *     - list packages in alphabetical order
  *     - check morphomin and morphomax against morpho6 --version
  *     - add devinstall, which git clones a package (skips version checks for it)
+ *     - detect apt, pacman, or dnf, remember that choice, and add setpackagemanager
  * ================================================================= */
 
 var _version = "0.3.0"
@@ -52,6 +53,7 @@ var ErrMorphoPMClone = Error("ErrMorphoPMClone", "Couldn't clone package reposit
 var ErrMorphoPMDev = Error("ErrMorphoPMDev", "Package folder already exists")
 var ErrMorphoPMAlrdy = Error("ErrMorphoPMAlrdy", "Package is already installed")
 var ErrMorphoPMDevUp = Error("ErrMorphoPMDevUp", "Package is a dev install")
+var ErrMorphoPMPkgMgr = Error("ErrMorphoPMPkgMgr", "Unrecognized package manager")
 var ErrMorphoEnv = Error("ErrMorphoEnv", "Couldn't create environment file")
 
 /* -------------------
@@ -298,6 +300,85 @@ fn createEnvironment(file) {
   return MorphoEnvironment(file)
 }
 
+/* --------------------------------
+ * ExternalPackageManager
+ * -------------------------------- */
+
+/** Names and distro ids that map onto a package manager. */
+var _pkgMgrNames = {
+  "apt" : "apt", "debian" : "apt", "ubuntu" : "apt", "linuxmint" : "apt", "pop" : "apt",
+  "pacman" : "pacman", "arch" : "pacman",
+  "dnf" : "dnf", "fedora" : "dnf", "rhel" : "dnf", "centos" : "dnf", "rocky" : "dnf", "almalinux" : "dnf",
+  "brew" : "brew", "homebrew" : "brew",
+  "winget" : "winget"
+}
+
+/** Display name and install command for each package manager. */
+var _pkgMgrInstall = {
+  "brew" : [ "homebrew", "brew install --quiet" ],
+  "winget" : [ "winget", "winget install" ],
+  "apt" : [ "apt-get", "sudo apt-get install" ],
+  "pacman" : [ "pacman", "sudo pacman -S --needed" ],
+  "dnf" : [ "dnf", "sudo dnf install" ]
+}
+
+/** The system package manager used to install dependencies such as apt or brew. */
+class ExternalPackageManager {
+  init(label) {
+    if (label) {
+      if (!_pkgMgrNames.contains(label)) ErrMorphoPMPkgMgr.throw("Unrecognized package manager ${label}. Use apt, pacman, dnf, brew, or winget")
+      self.name = _pkgMgrNames[label]
+    } else self.name = self._detect()
+  }
+
+  install(dep) {
+    var spec = _pkgMgrInstall[self.name]
+    print "Using ${spec[0]} to install ${dep}"
+    if (self.name=="winget") print "Winget may launch a separate window to perform the installation; you may need to accept the installation."
+    else if (self.name!="brew") print "Please note ${self.name} may ask you for your password to install missing packages."
+    systemErrCheck("${spec[1]} ${dep}", ErrMorphoPMDep)
+  }
+
+  /** Strip one matching pair of double quotes from an os-release value. */
+  _unquote(s) {
+    if (s.count()>=2 && s[0]=="\"" && s[s.count()-1]=="\"") return s.substring(1, s.count()-1)
+    return s
+  }
+
+  /** Distro ids from /etc/os-release, ID first and then ID_LIKE. */
+  _linuxIds() {
+    var ids = []
+    try {
+      var f = File("/etc/os-release", "r")
+      for (l in f.lines()) {
+        if (l.count()==0 || l[0]=="#") continue
+        var parts = l.split("=")
+        if (parts.count()<2) continue
+        if (parts[0]!="ID" && parts[0]!="ID_LIKE") continue
+        var val = self._unquote(parts[1])
+        for (id in val.split(" ")) {
+          if (id.count()>0) ids.append(id)
+        }
+      }
+      f.close()
+    } catch { "FlOpnFld": return ids }
+    return ids
+  }
+
+  /** brew on macOS, winget on Windows, otherwise the Linux distro's package manager. */
+  _detect() {
+    if (System.platform()=="macos") return "brew"
+    if (isWindows) return "winget"
+    for (id in self._linuxIds()) {
+      if (_pkgMgrNames.contains(id)) {
+        var pm = _pkgMgrNames[id]
+        if (pm=="apt" || pm=="pacman" || pm=="dnf") return pm
+      }
+    }
+    return "apt"
+  }
+}
+
 /* -------------------
  * MorphoConfig
  * ------------------- */
@@ -319,6 +400,13 @@ class MorphoConfig {
       "FlOpnFld" : 
       self.config = { }
       self.save() 
+    }
+    var label = nil
+    if (self.config.contains("@packagemanager")) label = self.config["@packagemanager"]
+    self.packagemanager = ExternalPackageManager(label)
+    if (label != self.packagemanager.name) {
+      self.config["@packagemanager"] = self.packagemanager.name
+      self.save()
     }
   }
 
@@ -374,6 +462,12 @@ class MorphoConfig {
   setPackageDefns(path) {
     self.config["@packagedefns"] = path
     self.save() 
+  }
+
+  setPackageManager(name) {
+    self.packagemanager = ExternalPackageManager(name)
+    self.config["@packagemanager"] = self.packagemanager.name
+    self.save()
   }
 }
 
@@ -476,9 +570,10 @@ class MorphoPackageDatabase {
  * ----------------------- */
 
 class MorphoPackageInstaller {
-  init(package, env) {
+  init(package, env, packagemanager) {
     self.package = package
     self.env = env
+    self.packagemanager = packagemanager
   }
 
   _unzip(src, dest, err) {
@@ -584,34 +679,12 @@ class MorphoPackageInstaller {
     self._removeFolder(tmp, ErrMorphoPMRmZp)
   }
 
-  _packageManager() {
-    if (System.platform()=="macos") {
-      return "brew"
-    } else if (isWindows) {
-      return "winget"
-    } else {
-      return "apt"
-    }
-  }
-
   _installDep(dep) {
-    var pm = self._packageManager() 
-    if (pm=="brew") {
-      print "Using homebrew to install ${dep}"
-      systemErrCheck("brew install --quiet ${dep}", ErrMorphoPMDep)
-    } else if (pm=="winget") {
-      print "Using winget to install ${dep}"
-      print "Winget may launch a separate window to perform the installation; you may need to accept the installation."
-      systemErrCheck("winget install ${dep}", ErrMorphoPMDep)
-    } else if (pm=="apt") {
-      print "Using apt-get to install ${dep}"
-      print "Please note apt may ask you for your password to install missing packages."
-      systemErrCheck("sudo apt-get install ${dep}", ErrMorphoPMDep)
-    }
+    self.packagemanager.install(dep)
   }
 
   prereq() {
-    var pm = self._packageManager() 
+    var pm = self.packagemanager.name 
 
     if (self.package.dependencies &&
       self.package.dependencies.contains(pm)) {
@@ -739,6 +812,7 @@ class MorphoPackageManager {
     print "morphopm uninstall <packagename>  - uninstalls a package"
     print "morphopm upgrade <packagename>    - upgrades a package to the latest version"
     print "morphopm setdatabase <path>       - use a custom package definitions folder"
+    print "morphopm setpackagemanager <name> - use apt, pacman, dnf, brew, or winget"
     print "morphopm version                  - displays version information"
   }
 
@@ -749,6 +823,11 @@ class MorphoPackageManager {
       self.loadDatabase()
       print "Package database set to ${path}"
     } else ErrMorphoPckgDefns.throw()
+  }
+
+  _setPackageManager(name) {
+    self.config.setPackageManager(name)
+    print "Package manager set to ${self.config.packagemanager.name}"
   }
 
   install(name) {
@@ -801,7 +880,7 @@ class MorphoPackageManager {
 
   _installBody(name) {
     var pkg = self.database[name]
-    MorphoPackageInstaller(pkg, self.env).install(self._packageLocation(name))
+    MorphoPackageInstaller(pkg, self.env, self.config.packagemanager).install(self._packageLocation(name))
     self.config.install(pkg.name, pkg.version)
   }
 
@@ -837,7 +916,7 @@ class MorphoPackageManager {
     if (self.config[name]) {
       if (self.database.contains(name)) {
         var pkg = self.database[name]
-        MorphoPackageInstaller(pkg, self.env).uninstall(self._packageLocation(name))
+        MorphoPackageInstaller(pkg, self.env, self.config.packagemanager).uninstall(self._packageLocation(name))
         self.config.uninstall(pkg.name)
       } else ErrMorphoPMUnrcgnzdPckg.throw() 
     } else ErrMorphoPMNotInst.throw("Package ${name} is not installed")
@@ -881,7 +960,7 @@ class MorphoPackageManager {
       var stack = [ name ]
       self._satisfyRequires(self.database[name], stack)
       var pkg = self.database[name]
-      MorphoPackageInstaller(pkg, self.env).devinstall(loc)
+      MorphoPackageInstaller(pkg, self.env, self.config.packagemanager).devinstall(loc)
       self.config.install(pkg.name, _devMarker)
     } else ErrMorphoPMUnrcgnzdPckg.throw()
   }
@@ -933,6 +1012,8 @@ class MorphoPackageManager {
         print _version
       } else if (args[0]=="setdatabase") {
         self._multi(self._setDatabase, args)
+      } else if (args[0]=="setpackagemanager") {
+        self._multi(self._setPackageManager, args)
       } else {
         ErrMorphoPMUnrcgnzd.warning()
         self.help() 

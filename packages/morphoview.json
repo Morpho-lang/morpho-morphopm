@@ -6,7 +6,9 @@
     "build" : "cmake",
     "dependencies" : {
         "apt" : [ "libglfw3-dev", "libfreetype6-dev", "libczmq-dev" ],
-        "brew" : [ "glfw", "freetype", "czmq" ]
+        "brew" : [ "glfw", "freetype", "czmq" ],
+        "pacman" : [ "glfw", "freetype2", "czmq" ],
+        "dnf" : [ "glfw-devel", "freetype-devel", "czmq-devel" ]
     },
     "requires" : { "zeromq" : ">=0.7.1" },
     "morphomin" : "0.6.5"
