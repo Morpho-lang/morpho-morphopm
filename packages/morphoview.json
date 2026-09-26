@@ -1,0 +1,13 @@
+{
+    "name" : "morphoview",
+    "version" : "0.6.5",
+    "git" : "https://github.com/Morpho-lang/morpho-morphoview",
+    "url" : "https://github.com/Morpho-lang/morpho-morphoview/archive/refs/heads/dev.zip",
+    "build" : "cmake",
+    "dependencies" : {
+        "apt" : [ "libglfw3-dev", "libfreetype6-dev", "libczmq-dev" ],
+        "brew" : [ "glfw", "freetype", "czmq" ]
+    },
+    "requires" : { "zeromq" : ">=0.7.1" },
+    "morphomin" : "0.6.5"
+}
