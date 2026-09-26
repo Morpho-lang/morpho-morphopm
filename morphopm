@@ -1,8 +1,8 @@
 #!/usr/bin/env morpho6
 
-/* ===============================================
+/* =================================================================
  *  morphopm - a basic package manager for morpho 
- * ===============================================
+ * =================================================================
  *  v0.1.0 - 1/1/25
  *  v0.2.0 - 7/8/26
  *     - fix unzipping Github archives
@@ -14,14 +14,15 @@
  *  v0.2.2 - 7/30/26
  *     - add path command to print a package's install directory
  *     - add open command to reveal a package's install directory
- *  v0.2.3 - 9/26/26
+ *  v0.3.0 - 9/26/26
  *     - add requires field to package definitions
  *     - install required packages before the requested package
  *     - list packages in alphabetical order
  *     - check morphomin and morphomax against morpho6 --version
- * =============================================== */
+ *     - add devinstall, which git clones a package (skips version checks for it)
+ * ================================================================= */
 
-var _version = "0.2.3"
+var _version = "0.3.0"
 
 /* -------------------
  * Error messages 
@@ -47,6 +48,10 @@ var ErrMorphoDupPkg = Error("ErrMorphoDupPkg", "Morpho environment contains a du
 var ErrMorphoVrsnPrse = Error("ErrMorphoVrsnPrse", "Incorrectly formatted version string")
 var ErrMorphoPMOutdtd = Error("ErrMorphoPMOutdtd", "Your copy of morpho is too outdated to upgrade this package")
 var ErrMorphoPMTooNew = Error("ErrMorphoPMTooNew", "Your copy of morpho is too new for this package")
+var ErrMorphoPMClone = Error("ErrMorphoPMClone", "Couldn't clone package repository")
+var ErrMorphoPMDev = Error("ErrMorphoPMDev", "Package folder already exists")
+var ErrMorphoPMAlrdy = Error("ErrMorphoPMAlrdy", "Package is already installed")
+var ErrMorphoPMDevUp = Error("ErrMorphoPMDevUp", "Package is a dev install")
 var ErrMorphoEnv = Error("ErrMorphoEnv", "Couldn't create environment file")
 
 /* -------------------
@@ -69,6 +74,8 @@ var isWindows = (System.platform()=="windows") // Check if we're on windows at t
 
 var checkMark = (isWindows ? "[X]" : "✅") // Windows terminals often have trouble with emoji
 var upArrow = (isWindows ? "[^]" : "⬆️")
+var devMark = (isWindows ? "[D]" : "🚧")
+var _devMarker = "dev" // Config value for a package installed with devinstall
 
 /* -------------------
  * Utility functions
@@ -441,6 +448,7 @@ class MorphoPackageDatabase {
   _status(config, key, version) {
     if (config) {
       if (config.isInstalled(key)) {
+        if (config[key]==_devMarker) return devMark
         if (config[key]==version) return checkMark
         else return upArrow
       } 
@@ -675,6 +683,25 @@ class MorphoPackageInstaller {
     }
   }
 
+  // Dependencies and build match a normal install. The source comes from git instead of a release zip.
+  devinstall(location) {
+    var loc = Folder.normalizePath(location)
+    print "Cloning package ${self.package.name}"
+    try {
+      self.prereq()
+      if (!self.package.git) ErrMorphoPMClone.throw()
+      systemErrCheck("git clone \"${self.package.git}\" \"${loc}\"", ErrMorphoPMClone)
+      self.build(loc)
+      self.activate(loc)
+    } catch {
+      "ErrMorphoPMDep": self._recover(loc, ErrMorphoPMDep)
+      "ErrMorphoPMClone": self._recover(loc, ErrMorphoPMClone)
+      "ErrMorphoPMPckgFldr": self._recover(loc, ErrMorphoPckgFldr)
+      "ErrMorphoPMCmkFldr": self._recover(loc, ErrMorphoPMCmkFldr)
+      "ErrMorphoPMCmk": self._recover(loc, ErrMorphoPMCmk)
+    }
+  }
+
   uninstall(location) {
     var loc = Folder.normalizePath(location)
     self.deactivate(loc) 
@@ -705,6 +732,7 @@ class MorphoPackageManager {
     print "Usage:"
     print "morphopm help                     - displays this help message" 
     print "morphopm install <packagename>    - installs a package"
+    print "morphopm devinstall <packagename> - clones a package for development"
     print "morphopm list                     - lists available packages"
     print "morphopm open <packagename>       - opens the install folder of a package"
     print "morphopm path <packagename>       - prints the install path of a package"
@@ -726,7 +754,7 @@ class MorphoPackageManager {
   install(name) {
     self.loadDatabase()
     if (self.config[name]) {
-      print "Package ${name} already installed"
+      ErrMorphoPMAlrdy.warning("Package ${name} is already installed")
     } else if (self.database.contains(name)) {
       self._ensure(name, [], false)
     } else ErrMorphoPMUnrcgnzdPckg.throw() 
@@ -742,15 +770,21 @@ class MorphoPackageManager {
     next.append(name)
 
     var pkg = self.database[name]
-    self._checkMorphoVersion(pkg)
+    if (!self._isDev(name)) self._checkMorphoVersion(pkg)
     self._satisfyRequires(pkg, next)
 
     if (!self.config.isInstalled(name)) {
       self._installBody(name)
+    } else if (mustUpgrade && self._isDev(name)) {
+      ErrMorphoPMDevUp.warning("Package ${name} is a dev install; cd to the package folder and run 'git pull' to update it.")
     } else if (mustUpgrade) {
       self.uninstall(name)
       self._installBody(name)
     }
+  }
+
+  _isDev(name) {
+    return self.config.isInstalled(name) && self.config[name]==_devMarker
   }
 
   // morphomin and morphomax are inclusive bounds on the running morpho version.
@@ -777,6 +811,7 @@ class MorphoPackageManager {
     for (dep in pkg.requires.keys()) {
       if (!self.database.contains(dep)) ErrMorphoPMUnrcgnzdPckg.throw("Package ${pkg.name} requires ${dep}")
       if (stack.contains(dep)) ErrMorphoPMReqCycle.throw("${pkg.name} requires ${dep}, which is already being installed")
+      if (self._isDev(dep)) continue // A dev checkout is the programmer's responsibility
 
       var constraint = VersionConstraint(pkg.requires[dep])
       var published = Version(self.database[dep].version)
@@ -836,11 +871,28 @@ class MorphoPackageManager {
     self._openFolder(self._requireInstalled(name))
   }
 
+  devinstall(name) {
+    self.loadDatabase()
+    if (self.config[name]) {
+      ErrMorphoPMAlrdy.warning("Package ${name} is already installed")
+    } else if (self.database.contains(name)) {
+      var loc = self._packageLocation(name)
+      if (Folder.isFolder(loc)) ErrMorphoPMDev.throw("Package folder ${loc} already exists. Uninstall it before a dev install")
+      var stack = [ name ]
+      self._satisfyRequires(self.database[name], stack)
+      var pkg = self.database[name]
+      MorphoPackageInstaller(pkg, self.env).devinstall(loc)
+      self.config.install(pkg.name, _devMarker)
+    } else ErrMorphoPMUnrcgnzdPckg.throw()
+  }
+
   upgrade(name) { 
     self.loadDatabase()
     if (!self.database.contains(name)) ErrMorphoPMUnrcgnzdPckg.throw() 
 
-    if (self.config[name]) {
+    if (self._isDev(name)) {
+      ErrMorphoPMDevUp.warning("Package ${name} is a dev install; cd to the package folder and run 'git pull' to update it.")
+    } else if (self.config[name]) {
       var vInstalled = Version(self.config[name])
       var vLatest = Version(self.database[name].version)
 
@@ -863,13 +915,15 @@ class MorphoPackageManager {
         self.help()
       } else if (args[0]=="install") {
         self._multi(self.install, args) 
+      } else if (args[0]=="devinstall") {
+        self._multi(self.devinstall, args) 
       } else if (args[0]=="uninstall") {
         self._multi(self.uninstall, args) 
       } else if (args[0]=="upgrade") {
         self._multi(self.upgrade, args) 
       } else if (args[0]=="list") {
         self.loadDatabase()
-        print "morphopm available packages: (${checkMark}=installed; ${upArrow} =upgrade available)"
+        print "morphopm available packages: (${checkMark}=installed; ${upArrow}=upgrade available; ${devMark}=dev install)"
         self.database.list(config=self.config) 
       } else if (args[0]=="path") {
         self._multi(self.path, args)
