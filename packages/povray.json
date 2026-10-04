@@ -3,6 +3,6 @@
     "version" : "1.0.0",
     "git" : "https://github.com/Morpho-lang/morpho-povray",
     "url" : "https://github.com/Morpho-lang/morpho-povray/archive/refs/tags/v1.0.0.zip",
-    "dependencies" : { "apt" : "povray", "brew": "povray", "pacman": "povray", "dnf": "povray" },
+    "dependencies" : { "apt" : "povray", "brew": "povray", "pacman": "povray", "dnf": "povray", "winget": "PersistenceOfVisionRaytracer.POVRay" },
     "morphomin" : "0.6.5"
 }

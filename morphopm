@@ -22,9 +22,12 @@
  *     - check morphomin and morphomax against morpho6 --version
  *     - add devinstall, which git clones a package (skips version checks for it)
  *     - detect apt, pacman, or dnf, remember that choice, and add setpackagemanager
+ *  v0.3.1 - 10/4/26
+ *     - support Windows building CMake packages with clang-cl and install vcpkg dependencies
+ *     - prefer local package database in ./packages to facilitate testing.
  * ================================================================= */
 
-var _version = "0.3.0"
+var _version = "0.3.1"
 
 /* -------------------
  * Error messages 
@@ -68,18 +71,19 @@ var packageFolder = Folder.normalizePath("${homeFolder}/morpho") // Where packag
 var environmentFile = Folder.normalizePath("${homeFolder}/.morphopackages") // The default environment is stored in ~/.morphopackages
 var configFile = Folder.normalizePath("${homeFolder}/.morphopmconfig.json") // JSON file with installed packages
 
-var defnsFolderLocations = ( "/home/linuxbrew/.linuxbrew/share/morphopm", 
+var defnsFolderLocations = ( "./packages",
+                             "/home/linuxbrew/.linuxbrew/share/morphopm", 
                              "/opt/homebrew/share/morphopm", 
                              "/usr/local/share/morphopm",
-                             "C:/Program Files/Morpho/share/morphopm",
-                             "./packages" )
+                             "C:/Program Files/Morpho/share/morphopm" )
 
-var isWindows = (System.platform()=="windows") // Check if we're on windows at the start
+var isWindows = (System.platform()=="windows")
+var _vcpkgTriplet = "x64-windows"
 
-var checkMark = (isWindows ? "[X]" : "✅") // Windows terminals often have trouble with emoji
+var checkMark = (isWindows ? "[X]" : "✅")
 var upArrow = (isWindows ? "[^]" : "⬆️")
 var devMark = (isWindows ? "[D]" : "🚧")
-var _devMarker = "dev" // Config value for a package installed with devinstall
+var _devMarker = "dev"
 
 /* -------------------
  * Utility functions
@@ -110,6 +114,32 @@ fn _baseName(path) {
   var parts = Folder.normalizePath(path).split("/\\")
   if (parts.count()==0) return path
   return parts[-1]
+}
+
+// First non-empty line, without a trailing carriage return
+fn _firstLine(text) {
+  if (!text) return ""
+  for (part in text.split("\r\n")) {
+    if (part.count()>0) return part
+  }
+  return ""
+}
+
+// Parent directory of a file or folder
+fn _parentDir(path) {
+  var parts = []
+  for (part in Folder.normalizePath(path).split("/\\")) {
+    if (part.count()>0) parts.append(part)
+  }
+  if (parts.count()<2) return path
+  var out = parts[0]
+  for (i in 1...parts.count()-1) out = "${out}/${parts[i]}"
+  return Folder.normalizePath(out)
+}
+
+// Path with forward slashes
+fn _forward(path) {
+  return String.join(Folder.normalizePath(path).split("\\"), "/")
 }
 
 /** Displays a table */
@@ -585,6 +615,7 @@ class MorphoPackageInstaller {
     self.package = package
     self.env = env
     self.packagemanager = packagemanager
+    self.vcpkgRoot = nil
   }
 
   _unzip(src, dest, err) {
@@ -625,9 +656,9 @@ class MorphoPackageInstaller {
     } else systemErrCheck("rm -rf ${folder}", err)
   }
 
-  // Remove partial install artifacts after a failed install. Best-effort: errors
-  // are ignored so cleanup itself does not mask the original failure.
+  // Remove a failed install
   _cleanupFailedInstall(location) {
+    System.setworkingfolder(homeFolder)
     print "Cleaning up failed install of ${self.package.name}"
     self.deactivate(location)
     var tmp = "${location}-tmp"
@@ -643,14 +674,10 @@ class MorphoPackageInstaller {
 
   fetch(location) {
     print "Fetching package ${self.package.name}"
-    // -L -> follow redirects
     systemErrCheck("curl -L ${self.package.url} -o ${location}.zip", ErrMorphoPMFtch)
   }
 
-  // GitHub archives unpack into a single top-level folder whose name depends
-  // on the ref: branch zips use morpho-<name>-main, while tag zips use
-  // morpho-<name>-<version> (or morpho-<name>-v<version>). Discover the
-  // folder rather than assuming a fixed name.
+  // Top-level folder in the unpacked archive
   _findArchiveRoot(tmp) {
     var name = self.package.name
     var version = self.package.version
@@ -674,7 +701,7 @@ class MorphoPackageInstaller {
     var tmp = "${location}-tmp"
     print "Unzipping package ${self.package.name}"
 
-    // Extract zip contents into a temporary folder 
+    // Extract zip contents into a temporary folder
     if (Folder.isFolder(location)) self._removeFolder(location)
     if (Folder.isFolder(tmp)) self._removeFolder(tmp)
     try { Folder.create(tmp) } catch { "FldrCrtFld": ErrMorphoPckgFldr.throw() }
@@ -685,13 +712,55 @@ class MorphoPackageInstaller {
     var subfldr = self._findArchiveRoot(tmp)
     self._move("${tmp}/${subfldr}", location, ErrMorphoPMUnzp)
 
-    // Cleanup 
+    // Cleanup
     self._removeFile("${location}.zip", ErrMorphoPMRmZp)
     self._removeFolder(tmp, ErrMorphoPMRmZp)
   }
 
   _installDep(dep) {
     self.packagemanager.install(dep)
+  }
+
+  // Directory containing vcpkg.exe
+  _findVcpkg() {
+    var candidates = []
+    var found = _firstLine(System.subprocess("where vcpkg 2>nul")["stdout"])
+    if (found.count()>0) candidates.append(_parentDir(found))
+    candidates.append("C:/vcpkg")
+    candidates.append("${homeFolder}/vcpkg")
+
+    var withPackages = nil
+    var any = nil
+    for (root in candidates) {
+      var exe = Folder.normalizePath("${root}/vcpkg.exe")
+      if (!File.isFile(exe)) continue
+      if (!any) any = Folder.normalizePath(root)
+      if (Folder.isFolder("${root}/installed")) withPackages = Folder.normalizePath(root)
+    }
+    if (withPackages) return withPackages
+    return any
+  }
+
+  _installVcpkgDep(dep) {
+    print "Using vcpkg to install ${dep}"
+    print "The first build of a native library can take several minutes."
+    var exe = Folder.normalizePath("${self.vcpkgRoot}/vcpkg.exe")
+    systemErrCheck("\"${exe}\" install ${dep} --triplet ${_vcpkgTriplet}", ErrMorphoPMDep)
+  }
+
+  // True when Visual Studio's clang-cl toolset is installed
+  _hasClangCl() {
+    var vswhere = "C:/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
+    if (!File.isFile(vswhere)) return false
+    var result = System.subprocess("\"${vswhere}\" -latest -requires Microsoft.VisualStudio.Component.VC.Llvm.Clang -property installationPath")
+    return _firstLine(result["stdout"]).count()>0
+  }
+
+  // Morpho install root
+  _morphoPrefix() {
+    var exe = _firstLine(System.subprocess("where morpho6")["stdout"])
+    if (exe.count()==0) return nil
+    return _parentDir(_parentDir(exe))
   }
 
   prereq() {
@@ -705,6 +774,18 @@ class MorphoPackageInstaller {
       if (isstring(deps)) self._installDep(deps) 
       else for (dep in deps) self._installDep(dep) 
     }
+
+    if (isWindows && self.package.dependencies &&
+        self.package.dependencies.contains("vcpkg")) {
+      self.vcpkgRoot = self._findVcpkg()
+      if (!self.vcpkgRoot) {
+        ErrMorphoPMDep.throw("Package ${self.package.name} needs vcpkg to build on Windows. Install it from https://github.com/microsoft/vcpkg so that vcpkg.exe is on PATH or at C:\\vcpkg\\vcpkg.exe")
+      }
+      print "Obtaining vcpkg dependencies for ${self.package.name}"
+      var vdeps = self.package.dependencies["vcpkg"]
+      if (isstring(vdeps)) self._installVcpkgDep(vdeps)
+      else for (dep in vdeps) self._installVcpkgDep(dep)
+    }
   }
 
   _cmake(location) {
@@ -716,18 +797,37 @@ class MorphoPackageInstaller {
       try { Folder.create(bld) } catch { "FldrCrtFld": ErrMorphoPMCmkFldr.throw() }
     }
 
+    var args = [ "cmake",
+                 "-DCMAKE_INSTALL_PREFIX=\"${_forward(location)}\"",
+                 "-DCMAKE_BUILD_TYPE=Release" ]
+    if (isWindows) {
+      if (!self._hasClangCl()) {
+        ErrMorphoPMCmk.throw("Building on Windows needs the Visual Studio C++ Clang tools (clang-cl). MSVC stops with error C2099 on Morpho class declarations. In the Visual Studio Installer, add 'C++ Clang Compiler for Windows', then try again.")
+      }
+      var prefix = self._morphoPrefix()
+      if (!prefix || !File.isFile("${prefix}/include/morpho/morpho.h")) {
+        ErrMorphoPMCmk.throw("Couldn't find the Morpho headers next to morpho6.exe")
+      }
+      args.append("-T")
+      args.append("ClangCL")
+      args.append("-DCMAKE_PREFIX_PATH=\"${_forward(prefix)}\"")
+      if (self.vcpkgRoot) {
+        args.append("-DCMAKE_TOOLCHAIN_FILE=\"${_forward("${self.vcpkgRoot}/scripts/buildsystems/vcpkg.cmake")}\"")
+        args.append("-DVCPKG_TARGET_TRIPLET=${_vcpkgTriplet}")
+        args.append("-DVCPKG_MANIFEST_MODE=OFF")
+      }
+    }
+    var configure = String.join(args, " ")
+
     System.setworkingfolder(bld)
-
-    var gen = "" 
-    if (isWindows && system("ninja --version >nul 2>&1")==0) gen = "-G Ninja" // Use ninja on windows if available
-
-    systemErrCheck(
-        "cmake ${gen} -DCMAKE_RULE_MESSAGES=OFF -DCMAKE_INSTALL_PREFIX=\"${location}\" -DCMAKE_BUILD_TYPE=Release ..",
-        ErrMorphoPMCmk
-    )
-
-    systemErrCheck("cmake --build . --config Release --target install", ErrMorphoPMCmk)
-
+    try {
+      systemErrCheck("${configure} ..", ErrMorphoPMCmk)
+      systemErrCheck("cmake --build . --config Release --target install", ErrMorphoPMCmk)
+    } catch {
+      "ErrMorphoPMCmk":
+        System.setworkingfolder(cwd)
+        ErrMorphoPMCmk.throw()
+    }
     System.setworkingfolder(cwd)
   }
 
@@ -767,7 +867,7 @@ class MorphoPackageInstaller {
     }
   }
 
-  // Dependencies and build match a normal install. The source comes from git instead of a release zip.
+  // Install from the package git repository
   devinstall(location) {
     var loc = Folder.normalizePath(location)
     print "Cloning package ${self.package.name}"
@@ -850,8 +950,7 @@ class MorphoPackageManager {
     } else ErrMorphoPMUnrcgnzdPckg.throw() 
   }
 
-  // Install name after its requirements. mustUpgrade reinstalls an older copy
-  // once those requirements are satisfied. stack is the chain already being resolved.
+  // Install a package and its requirements
   _ensure(name, stack, mustUpgrade) {
     if (stack.contains(name)) ErrMorphoPMReqCycle.throw("Package requirement cycle involving ${name}")
 
@@ -877,7 +976,7 @@ class MorphoPackageManager {
     return self.config.isInstalled(name) && self.config[name]==_devMarker
   }
 
-  // morphomin and morphomax are inclusive bounds on the running morpho version.
+  // Reject a package outside its Morpho version range
   _checkMorphoVersion(pkg) {
     if (!pkg.morphomin && !pkg.morphomax) return
     var current = currentMorphoVersion()
@@ -972,7 +1071,6 @@ class MorphoPackageManager {
     if (System.platform()=="macos") {
       systemErrCheck("open ${location}", ErrMorphoPMOpen)
     } else if (isWindows) {
-      // explorer often returns non-zero even on success; Invoke-Item reports failures reliably
       systemErrCheck("powershell -Command \"Invoke-Item -LiteralPath '${Folder.normalizePath(location)}'\"", ErrMorphoPMOpen)
     } else {
       systemErrCheck("xdg-open ${location}", ErrMorphoPMOpen)
@@ -1059,7 +1157,6 @@ class MorphoPackageManager {
   }
 }
 
-// Ensure the package folder exists 
 if (!Folder.isFolder(packageFolder)) {
   print "Creating folder `${packageFolder}` where morpho packages will be stored."
   try { Folder.create(packageFolder) } catch { "FldrCrtFld": ErrMorphoPckgFldr.throw() }
