@@ -132,9 +132,8 @@ fn _parentDir(path) {
     if (part.count()>0) parts.append(part)
   }
   if (parts.count()<2) return path
-  var out = parts[0]
-  for (i in 1...parts.count()-1) out = "${out}/${parts[i]}"
-  return Folder.normalizePath(out)
+  parts.pop()
+  return Folder.normalizePath(String.join(parts, "/"))
 }
 
 // Path with forward slashes
@@ -808,13 +807,12 @@ class MorphoPackageInstaller {
       if (!prefix || !File.isFile("${prefix}/include/morpho/morpho.h")) {
         ErrMorphoPMCmk.throw("Couldn't find the Morpho headers next to morpho6.exe")
       }
-      args.append("-T")
-      args.append("ClangCL")
-      args.append("-DCMAKE_PREFIX_PATH=\"${_forward(prefix)}\"")
+      args = args.join([ "-T", "ClangCL",
+                         "-DCMAKE_PREFIX_PATH=\"${_forward(prefix)}\"" ])
       if (self.vcpkgRoot) {
-        args.append("-DCMAKE_TOOLCHAIN_FILE=\"${_forward("${self.vcpkgRoot}/scripts/buildsystems/vcpkg.cmake")}\"")
-        args.append("-DVCPKG_TARGET_TRIPLET=${_vcpkgTriplet}")
-        args.append("-DVCPKG_MANIFEST_MODE=OFF")
+        args = args.join([ "-DCMAKE_TOOLCHAIN_FILE=\"${_forward("${self.vcpkgRoot}/scripts/buildsystems/vcpkg.cmake")}\"",
+                           "-DVCPKG_TARGET_TRIPLET=${_vcpkgTriplet}",
+                           "-DVCPKG_MANIFEST_MODE=OFF" ])
       }
     }
     var configure = String.join(args, " ")
@@ -1025,7 +1023,10 @@ class MorphoPackageManager {
     self.loadDatabase()
     if (!self.config[name]) ErrMorphoPMNotInst.throw("Package ${name} is not installed")
     var users = self._requiredBy(name)
-    if (users.count()>0) ErrMorphoPMInUse.throw("Package ${name} is required by ${self._join(users)}")
+    if (users.count()>0) {
+      var listed = String.join(users, ", ")
+      ErrMorphoPMInUse.throw("Package ${name} is required by ${listed}")
+    }
     self._remove(name)
   }
 
@@ -1039,15 +1040,6 @@ class MorphoPackageManager {
     }
     users.sort()
     return users
-  }
-
-  _join(items) {
-    var text = ""
-    for (item in items) {
-      if (text.count()>0) text = "${text}, ${item}"
-      else text = item
-    }
-    return text
   }
 
   _remove(name) {
