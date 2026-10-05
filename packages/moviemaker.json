@@ -1,8 +1,8 @@
 {
     "name" : "moviemaker",
-    "version" : "1.0.1",
+    "version" : "1.0.2",
     "git" : "https://github.com/morpho-lang/morpho-moviemaker",
-    "url" : "https://github.com/Morpho-lang/morpho-moviemaker/archive/refs/tags/v1.0.1.zip",
+    "url" : "https://github.com/Morpho-lang/morpho-moviemaker/archive/refs/tags/v1.0.2.zip",
     "dependencies" : { "apt" : "ffmpeg", "brew": "ffmpeg", "pacman": "ffmpeg", "dnf": "ffmpeg-free", "winget": "Gyan.FFmpeg" },
     "requires" : { "povray" : ">=1.0.0" },
     "morphomin" : "0.6.5"
