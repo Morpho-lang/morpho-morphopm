@@ -48,7 +48,6 @@ var ErrMorphoPMDep = Error("ErrMorphoPMDep", "Couldn't install package dependenc
 var ErrMorphoPMReq = Error("ErrMorphoPMReq", "Package requirement is not satisfied")
 var ErrMorphoPMInUse = Error("ErrMorphoPMInUse", "Package is required by another installed package")
 var ErrMorphoPMReqCycle = Error("ErrMorphoPMReqCycle", "Package requirements contain a cycle")
-var ErrMorphoPMCmkFldr = Error("ErrMorphoPMCmkFldr", "Couldn't make build folder for CMake")
 var ErrMorphoPMCmk = Error("ErrMorphoPMCmk", "CMake Err")
 var ErrMorphoDupPkg = Error("ErrMorphoDupPkg", "Morpho environment contains a duplicate package")
 var ErrMorphoVrsnPrse = Error("ErrMorphoVrsnPrse", "Incorrectly formatted version string")
@@ -78,7 +77,6 @@ var defnsFolderLocations = ( "./packages",
                              "C:/Program Files/Morpho/share/morphopm" )
 
 var isWindows = (System.platform()=="windows")
-var _vcpkgTriplet = "x64-windows"
 
 var checkMark = (isWindows ? "[X]" : "✅")
 var upArrow = (isWindows ? "[^]" : "⬆️")
@@ -353,8 +351,17 @@ var _pkgMgrInstall = {
   "dnf" : [ "dnf", "sudo dnf install" ]
 }
 
-/** The system package manager used to install dependencies such as apt or brew. */
+/** Shared behavior for installing one dependency or a list of them. */
 class ExternalPackageManager {
+  installAll(deps) {
+    if (!deps) return
+    if (isstring(deps)) self.install(deps)
+    else for (dep in deps) self.install(dep)
+  }
+}
+
+/** The system package manager used to install dependencies such as apt or brew. */
+class SystemPackageManager is ExternalPackageManager {
   init(label) {
     if (label) {
       if (!_pkgMgrNames.contains(label)) ErrMorphoPMPkgMgr.throw("Unrecognized package manager ${label}. Use apt, pacman, dnf, brew, or winget")
@@ -367,11 +374,14 @@ class ExternalPackageManager {
     print "Using ${spec[0]} to install ${dep}"
     if (self.name=="winget") print "Winget may launch a separate window to perform the installation; you may need to accept the installation."
     else if (self.name!="brew") print "Please note ${self.name} may ask you for your password to install missing packages."
-    systemErrCheck("${spec[1]} ${dep}", ErrMorphoPMDep)
+    if (self.name=="winget") {
+      var status = system("${spec[1]} ${dep}")
+      // 0x8A15002B: the package is already installed and winget has no upgrade.
+      if (status!=0 && status!=-1978335189) ErrMorphoPMDep.throw()
+    } else systemErrCheck("${spec[1]} ${dep}", ErrMorphoPMDep)
   }
 
-  /** Strip one matching pair of double quotes from an os-release value. */
-  _unquote(s) {
+  _unquote(s) { // Strip one matching pair of double quotes from an os-release value.
     if (s.count()>=2 && s[0]=="\"" && s[s.count()-1]=="\"") return s.substring(1, s.count()-1)
     return s
   }
@@ -410,6 +420,50 @@ class ExternalPackageManager {
   }
 }
 
+/** vcpkg discovery, installation, and the CMake arguments it requires. */
+class VcpkgManager is ExternalPackageManager {
+  init(name) {
+    self.triplet = "x64-windows"
+    self.root = self._find()
+    if (!self.root) {
+      ErrMorphoPMDep.throw("Package ${name} needs vcpkg to build on Windows. Install it from https://github.com/microsoft/vcpkg so that vcpkg.exe is on PATH or at C:\\vcpkg\\vcpkg.exe")
+    }
+  }
+
+  install(dep) {
+    print "Using vcpkg to install ${dep}"
+    Error("VCPkgWaiting", "The first build of a native library can take several minutes.").warning()
+    var exe = Folder.normalizePath("${self.root}/vcpkg.exe")
+    systemErrCheck("\"${exe}\" install ${dep} --triplet ${self.triplet}", ErrMorphoPMDep)
+  }
+
+  cmakeOptions() {
+    return [ "-DCMAKE_TOOLCHAIN_FILE=\"${_forward("${self.root}/scripts/buildsystems/vcpkg.cmake")}\"",
+             "-DVCPKG_TARGET_TRIPLET=${self.triplet}",
+             "-DVCPKG_MANIFEST_MODE=OFF" ]
+  }
+
+  // Directory containing vcpkg.exe
+  _find() {
+    var candidates = []
+    var found = _firstLine(System.subprocess("where vcpkg 2>nul")["stdout"])
+    if (found.count()>0) candidates.append(_parentDir(found))
+    candidates.append("C:/vcpkg")
+    candidates.append("${homeFolder}/vcpkg")
+
+    var withPackages = nil
+    var any = nil
+    for (root in candidates) {
+      var exe = Folder.normalizePath("${root}/vcpkg.exe")
+      if (!File.isFile(exe)) continue
+      if (!any) any = Folder.normalizePath(root)
+      if (Folder.isFolder("${root}/installed")) withPackages = Folder.normalizePath(root)
+    }
+    if (withPackages) return withPackages
+    return any
+  }
+}
+
 /* -------------------
  * MorphoConfig
  * ------------------- */
@@ -434,7 +488,7 @@ class MorphoConfig {
     }
     var label = nil
     if (self.config.contains("@packagemanager")) label = self.config["@packagemanager"]
-    self.packagemanager = ExternalPackageManager(label)
+    self.packagemanager = SystemPackageManager(label)
     if (label != self.packagemanager.name) {
       self.config["@packagemanager"] = self.packagemanager.name
       self.save()
@@ -505,7 +559,7 @@ class MorphoConfig {
   }
 
   setPackageManager(name) {
-    self.packagemanager = ExternalPackageManager(name)
+    self.packagemanager = SystemPackageManager(name)
     self.config["@packagemanager"] = self.packagemanager.name
     self.save()
   }
@@ -614,7 +668,7 @@ class MorphoPackageInstaller {
     self.package = package
     self.env = env
     self.packagemanager = packagemanager
-    self.vcpkgRoot = nil
+    self.vcpkg = nil
   }
 
   _unzip(src, dest, err) {
@@ -657,7 +711,6 @@ class MorphoPackageInstaller {
 
   // Remove a failed install
   _cleanupFailedInstall(location) {
-    System.setworkingfolder(homeFolder)
     print "Cleaning up failed install of ${self.package.name}"
     self.deactivate(location)
     var tmp = "${location}-tmp"
@@ -716,37 +769,6 @@ class MorphoPackageInstaller {
     self._removeFolder(tmp, ErrMorphoPMRmZp)
   }
 
-  _installDep(dep) {
-    self.packagemanager.install(dep)
-  }
-
-  // Directory containing vcpkg.exe
-  _findVcpkg() {
-    var candidates = []
-    var found = _firstLine(System.subprocess("where vcpkg 2>nul")["stdout"])
-    if (found.count()>0) candidates.append(_parentDir(found))
-    candidates.append("C:/vcpkg")
-    candidates.append("${homeFolder}/vcpkg")
-
-    var withPackages = nil
-    var any = nil
-    for (root in candidates) {
-      var exe = Folder.normalizePath("${root}/vcpkg.exe")
-      if (!File.isFile(exe)) continue
-      if (!any) any = Folder.normalizePath(root)
-      if (Folder.isFolder("${root}/installed")) withPackages = Folder.normalizePath(root)
-    }
-    if (withPackages) return withPackages
-    return any
-  }
-
-  _installVcpkgDep(dep) {
-    print "Using vcpkg to install ${dep}"
-    print "The first build of a native library can take several minutes."
-    var exe = Folder.normalizePath("${self.vcpkgRoot}/vcpkg.exe")
-    systemErrCheck("\"${exe}\" install ${dep} --triplet ${_vcpkgTriplet}", ErrMorphoPMDep)
-  }
-
   // True when Visual Studio's clang-cl toolset is installed
   _hasClangCl() {
     var vswhere = "C:/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
@@ -769,34 +791,24 @@ class MorphoPackageInstaller {
       self.package.dependencies.contains(pm)) {
     
       print "Obtaining dependencies for ${self.package.name}"  
-      var deps = self.package.dependencies[pm]
-      if (isstring(deps)) self._installDep(deps) 
-      else for (dep in deps) self._installDep(dep) 
+      self.packagemanager.installAll(self.package.dependencies[pm])
     }
 
     if (isWindows && self.package.dependencies &&
         self.package.dependencies.contains("vcpkg")) {
-      self.vcpkgRoot = self._findVcpkg()
-      if (!self.vcpkgRoot) {
-        ErrMorphoPMDep.throw("Package ${self.package.name} needs vcpkg to build on Windows. Install it from https://github.com/microsoft/vcpkg so that vcpkg.exe is on PATH or at C:\\vcpkg\\vcpkg.exe")
-      }
+      self.vcpkg = VcpkgManager(self.package.name)
       print "Obtaining vcpkg dependencies for ${self.package.name}"
-      var vdeps = self.package.dependencies["vcpkg"]
-      if (isstring(vdeps)) self._installVcpkgDep(vdeps)
-      else for (dep in vdeps) self._installVcpkgDep(dep)
+      self.vcpkg.installAll(self.package.dependencies["vcpkg"])
     }
   }
 
   _cmake(location) {
-    var cwd = System.workingfolder()
     print "Building package ${self.package.name} with CMake"
 
     var bld = "${location}/build"
-    if (!Folder.isFolder(bld)) {
-      try { Folder.create(bld) } catch { "FldrCrtFld": ErrMorphoPMCmkFldr.throw() }
-    }
-
     var args = [ "cmake",
+                 "-S", "\"${_forward(location)}\"",
+                 "-B", "\"${_forward(bld)}\"",
                  "-DCMAKE_INSTALL_PREFIX=\"${_forward(location)}\"",
                  "-DCMAKE_BUILD_TYPE=Release" ]
     if (isWindows) {
@@ -809,24 +821,11 @@ class MorphoPackageInstaller {
       }
       args = args.join([ "-T", "ClangCL",
                          "-DCMAKE_PREFIX_PATH=\"${_forward(prefix)}\"" ])
-      if (self.vcpkgRoot) {
-        args = args.join([ "-DCMAKE_TOOLCHAIN_FILE=\"${_forward("${self.vcpkgRoot}/scripts/buildsystems/vcpkg.cmake")}\"",
-                           "-DVCPKG_TARGET_TRIPLET=${_vcpkgTriplet}",
-                           "-DVCPKG_MANIFEST_MODE=OFF" ])
-      }
+      if (self.vcpkg) args = args.join(self.vcpkg.cmakeOptions())
     }
-    var configure = String.join(args, " ")
 
-    System.setworkingfolder(bld)
-    try {
-      systemErrCheck("${configure} ..", ErrMorphoPMCmk)
-      systemErrCheck("cmake --build . --config Release --target install", ErrMorphoPMCmk)
-    } catch {
-      "ErrMorphoPMCmk":
-        System.setworkingfolder(cwd)
-        ErrMorphoPMCmk.throw()
-    }
-    System.setworkingfolder(cwd)
+    systemErrCheck(String.join(args, " "), ErrMorphoPMCmk)
+    systemErrCheck("cmake --build \"${_forward(bld)}\" --config Release --target install", ErrMorphoPMCmk)
   }
 
   build(location) {
@@ -845,43 +844,39 @@ class MorphoPackageInstaller {
     self.env.deactivate(location)
   }
 
-  install(location) {
+  _install(location, acquire) {
     var loc = Folder.normalizePath(location)
-    print "Installing package ${self.package.name}"  
-    try {
-      self.prereq() 
-      self.fetch(loc) 
-      self.unzip(loc) 
-      self.build(loc) 
-      self.activate(loc)
-    } catch {
-      "ErrMorphoPMDep": self._recover(loc, ErrMorphoPMDep)
-      "ErrMorphoPMFtch": self._recover(loc, ErrMorphoPMFtch)
-      "ErrMorphoPMPckgFldr": self._recover(loc, ErrMorphoPckgFldr)
-      "ErrMorphoPMUnzp": self._recover(loc, ErrMorphoPMUnzp)
-      "ErrMorphoPMRmZp": self._recover(loc, ErrMorphoPMRmZp)
-      "ErrMorphoPMCmkFldr": self._recover(loc, ErrMorphoPMCmkFldr)
-      "ErrMorphoPMCmk": self._recover(loc, ErrMorphoPMCmk)
-    }
-  }
-
-  // Install from the package git repository
-  devinstall(location) {
-    var loc = Folder.normalizePath(location)
-    print "Cloning package ${self.package.name}"
     try {
       self.prereq()
-      if (!self.package.git) ErrMorphoPMClone.throw()
-      systemErrCheck("git clone \"${self.package.git}\" \"${loc}\"", ErrMorphoPMClone)
+      apply(acquire, loc)
       self.build(loc)
       self.activate(loc)
     } catch {
       "ErrMorphoPMDep": self._recover(loc, ErrMorphoPMDep)
+      "ErrMorphoPMFtch": self._recover(loc, ErrMorphoPMFtch)
       "ErrMorphoPMClone": self._recover(loc, ErrMorphoPMClone)
       "ErrMorphoPMPckgFldr": self._recover(loc, ErrMorphoPckgFldr)
-      "ErrMorphoPMCmkFldr": self._recover(loc, ErrMorphoPMCmkFldr)
+      "ErrMorphoPMUnzp": self._recover(loc, ErrMorphoPMUnzp)
+      "ErrMorphoPMRmZp": self._recover(loc, ErrMorphoPMRmZp)
       "ErrMorphoPMCmk": self._recover(loc, ErrMorphoPMCmk)
     }
+  }
+
+  install(location) {
+    print "Installing package ${self.package.name}"
+    self._install(location, fn (loc) {
+      self.fetch(loc)
+      self.unzip(loc)
+    })
+  }
+
+  // Install from the package git repository
+  devinstall(location) {
+    print "Cloning package ${self.package.name}"
+    self._install(location, fn (loc) {
+      if (!self.package.git) ErrMorphoPMClone.throw()
+      systemErrCheck("git clone \"${self.package.git}\" \"${loc}\"", ErrMorphoPMClone)
+    })
   }
 
   uninstall(location) {
