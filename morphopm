@@ -22,7 +22,7 @@
  *     - check morphomin and morphomax against morpho6 --version
  *     - add devinstall, which git clones a package (skips version checks for it)
  *     - detect apt, pacman, or dnf, remember that choice, and add setpackagemanager
- *  v0.3.1 - 10/4/26
+ *  v0.3.1 - 10/6/26
  *     - support Windows building CMake packages with clang-cl and install vcpkg dependencies
  *     - prefer local package database in ./packages to facilitate testing.
  * ================================================================= */
@@ -811,7 +811,8 @@ class MorphoPackageInstaller {
                  "-B", "\"${_forward(bld)}\"",
                  "-DCMAKE_INSTALL_PREFIX=\"${_forward(location)}\"",
                  "-DCMAKE_BUILD_TYPE=Release" ]
-    if (isWindows) {
+    // clang-cl and the Morpho headers
+    if (isWindows && isstring(self.package.build) && self.package.build=="cmake") {
       if (!self._hasClangCl()) {
         ErrMorphoPMCmk.throw("Building on Windows needs the Visual Studio C++ Clang tools (clang-cl). MSVC stops with error C2099 on Morpho class declarations. In the Visual Studio Installer, add 'C++ Clang Compiler for Windows', then try again.")
       }
@@ -821,17 +822,24 @@ class MorphoPackageInstaller {
       }
       args = args.join([ "-T", "ClangCL",
                          "-DCMAKE_PREFIX_PATH=\"${_forward(prefix)}\"" ])
-      if (self.vcpkg) args = args.join(self.vcpkg.cmakeOptions())
     }
+    if (self.vcpkg) args = args.join(self.vcpkg.cmakeOptions())
 
     systemErrCheck(String.join(args, " "), ErrMorphoPMCmk)
     systemErrCheck("cmake --build \"${_forward(bld)}\" --config Release --target install", ErrMorphoPMCmk)
   }
 
+  // Build step for this platform
+  _buildKind() {
+    var build = self.package.build
+    if (!build) return nil
+    if (isstring(build)) return build
+    if (isdictionary(build) && build.contains(System.platform())) return build[System.platform()]
+    return nil
+  }
+
   build(location) {
-    if (self.package.build=="cmake") {
-      self._cmake(location)
-    }
+    if (self._buildKind()=="cmake") self._cmake(location)
   }
 
   activate(location) {
