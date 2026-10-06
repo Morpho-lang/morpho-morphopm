@@ -22,12 +22,16 @@
  *     - check morphomin and morphomax against morpho6 --version
  *     - add devinstall, which git clones a package (skips version checks for it)
  *     - detect apt, pacman, or dnf, remember that choice, and add setpackagemanager
- *  v0.3.1 - 10/6/26
+ *  v0.4.0 - 10/6/26
  *     - support Windows building CMake packages with clang-cl and install vcpkg dependencies
  *     - prefer local package database in ./packages to facilitate testing.
+ *     - add _pkgzip to archive an installed package for deployment
+ *     - add _pkginstall to install that archive without building (if newer)
+ *     - name binary archives with the platform, and refuse one for another system
+ *     - remove the build directory after a regular install
  * ================================================================= */
 
-var _version = "0.3.1"
+var _version = "0.4.0"
 
 /* -------------------
  * Error messages 
@@ -42,6 +46,10 @@ var ErrMorphoPMNotInst = Error("ErrMorphoPMNotInst", "Package is not installed")
 var ErrMorphoPMOpen = Error("ErrMorphoPMOpen", "Couldn't open package folder")
 var ErrMorphoPMFtch = Error("ErrMorphoPMFtch", "Couldn't fetch package file")
 var ErrMorphoPMUnzp = Error("ErrMorphoPMUnzp", "Couldn't unzip package file")
+var ErrMorphoPMZip = Error("ErrMorphoPMZip", "Couldn't create package zip")
+var ErrMorphoPMZipName = Error("ErrMorphoPMZipName", "Unrecognized package zip name")
+var ErrMorphoPMZipFile = Error("ErrMorphoPMZipFile", "Couldn't find package zip file")
+var ErrMorphoPMPlat = Error("ErrMorphoPMPlat", "Package archive is for a different platform")
 var ErrMorphoPMRmZp = Error("ErrMorphoPMRmZp", "Couldn't remove package zip file")
 var ErrMorphoPMRmPckg = Error("ErrMorphoPMRmPckg", "Couldn't remove package file")
 var ErrMorphoPMDep = Error("ErrMorphoPMDep", "Couldn't install package dependency")
@@ -77,6 +85,7 @@ var defnsFolderLocations = ( "./packages",
                              "C:/Program Files/Morpho/share/morphopm" )
 
 var isWindows = (System.platform()=="windows")
+var _platforms = [ "windows", "linux", "macos" ]
 
 var checkMark = (isWindows ? "[X]" : "✅")
 var upArrow = (isWindows ? "[^]" : "⬆️")
@@ -219,6 +228,22 @@ class Version {
   prnt() {
     System.prnt(self.toString())
   }
+}
+
+fn _parsePkgArchiveName(filename) { // Extract name and version from filename
+  var base = _baseName(filename)
+  var parts = base.split("_")
+  var version = nil, platform = nil
+  for (part in parts) {
+    if (_platforms.contains(part)) platform = part
+    if (part.count()>1 && part[0]=="v") part = part.substring(1, part.count())
+    try { version = Version(part).toString() } catch { "ErrMorphoVrsnPrse" : { } }
+  }
+  if (!version || !platform) ErrMorphoPMZipName.throw("Package archive '${base}' must include a version and platform")
+  if (platform!=System.platform()) {
+    ErrMorphoPMPlat.throw("Package archive '${base}' is for ${platform}, but this system is ${System.platform()}")
+  }
+  return { "name" : parts[0], "version" : version }
 }
 
 /* A requirement is empty (any version), ">=X.Y.Z", or an exact "X.Y.Z". */
@@ -572,23 +597,34 @@ class MorphoConfig {
 var _props = ("name", "version", "git", "url", "build", "dependencies", "requires", "morphomin", "morphomax")
 
 class MorphoPackage {
-  init(filename) {
+  _clear() {
     for (p in _props) self[p]=nil
+  }
+
+  init(String filename) {
+    self._clear()
     self.load(filename)
   }
 
-  load(filename) {
+  init(Dictionary fields) {
+    self._clear()
+    self.load(fields)
+  }
+
+  load(String filename) {
     var f = File(filename, "r")
     var contents = f.readall()
     f.close() 
 
     var dict=JSON.parse(contents)
     if (isdictionary(dict)) {
-      for (key in dict.keys()) {
-        self[key] = dict[key]
-      }
+      self.load(dict)
       self.defn = filename
     }
+  }
+
+  load(Dictionary fields) {
+    for (key in fields.keys()) self[key]=fields[key]
   }
 
   prnt() {
@@ -673,8 +709,27 @@ class MorphoPackageInstaller {
 
   _unzip(src, dest, err) {
     var nsrc = Folder.normalizePath(src), ndest = Folder.normalizePath(dest)
-    if (isWindows) systemErrCheck("tar -xf ${nsrc} -C ${ndest}", err)
-    else systemErrCheck("unzip -o -q ${src} -d ${dest}", err)
+    if (isWindows) systemErrCheck("tar -xf \"${nsrc}\" -C \"${ndest}\"", err)
+    else systemErrCheck("unzip -o -q \"${src}\" -d \"${dest}\"", err)
+  }
+
+  // Archive an installed package. The zip contains the install folder itself.
+  zipInstalled(location, zippath) {
+    print "Zipping package ${self.package.name}"
+    if (File.isFile(zippath)) self._removeFile(zippath, ErrMorphoPMZip)
+    var parent = _parentDir(location)
+    var dirname = _baseName(location)
+    if (isWindows || System.platform()=="macos") {
+      systemErrCheck("tar -a -cf \"${zippath}\" -C \"${parent}\" \"${dirname}\"", ErrMorphoPMZip)
+    } else {
+      systemErrCheck("cd \"${parent}\" && zip -r -q \"${zippath}\" -- \"${dirname}\"", ErrMorphoPMZip)
+    }
+  }
+
+  _copy(src, dest, err) {
+    var nsrc = Folder.normalizePath(src), ndest = Folder.normalizePath(dest)
+    if (isWindows) systemErrCheck("copy /Y \"${nsrc}\" \"${ndest}\" >nul", err)
+    else systemErrCheck("cp -f \"${nsrc}\" \"${ndest}\"", err)
   }
 
   _move(src, dest, err) {
@@ -852,12 +907,16 @@ class MorphoPackageInstaller {
     self.env.deactivate(location)
   }
 
-  _install(location, acquire) {
+  _install(location, acquire, fromSource=true, cleanBuild=false) {
     var loc = Folder.normalizePath(location)
     try {
-      self.prereq()
+      if (fromSource) self.prereq()
       apply(acquire, loc)
-      self.build(loc)
+      if (fromSource) self.build(loc)
+      if (cleanBuild) {
+        var bld = "${loc}/build"
+        if (Folder.isFolder(bld)) self._removeFolder(bld)
+      }
       self.activate(loc)
     } catch {
       "ErrMorphoPMDep": self._recover(loc, ErrMorphoPMDep)
@@ -870,12 +929,14 @@ class MorphoPackageInstaller {
     }
   }
 
-  install(location) {
+  install(location, zipfile=nil) {
     print "Installing package ${self.package.name}"
+    var source = !zipfile
     self._install(location, fn (loc) {
-      self.fetch(loc)
+      if (zipfile) self._copy(zipfile, "${loc}.zip", ErrMorphoPMFtch)
+      else self.fetch(loc)
       self.unzip(loc)
-    })
+    }, fromSource=source, cleanBuild=source)
   }
 
   // Install from the package git repository
@@ -943,7 +1004,6 @@ class MorphoPackageManager {
   }
 
   install(name) {
-    self.loadDatabase()
     if (self.config[name]) {
       ErrMorphoPMAlrdy.warning("Package ${name} is already installed")
     } else if (self.database.contains(name)) {
@@ -952,11 +1012,11 @@ class MorphoPackageManager {
   }
 
   // Install a package and its requirements
-  _ensure(name, stack, mustUpgrade) {
-    if (stack.contains(name)) ErrMorphoPMReqCycle.throw("Package requirement cycle involving ${name}")
+  _ensure(name, worklist, mustUpgrade) {
+    if (worklist.contains(name)) ErrMorphoPMReqCycle.throw("Package requirement cycle involving ${name}")
 
     var next = []
-    for (item in stack) next.append(item)
+    for (item in worklist) next.append(item)
     next.append(name)
 
     var pkg = self.database[name]
@@ -990,17 +1050,16 @@ class MorphoPackageManager {
   }
 
   _installBody(name) {
-    var pkg = self.database[name]
-    MorphoPackageInstaller(pkg, self.env, self.config.packagemanager).install(self._packageLocation(name))
-    self.config.install(pkg.name, pkg.version)
+    self._installerFor(name).install(self._packageLocation(name))
+    self.config.install(name, self.database[name].version)
   }
 
-  _satisfyRequires(pkg, stack) {
+  _satisfyRequires(pkg, worklist) {
     if (!pkg.requires) return
 
     for (dep in pkg.requires.keys()) {
       if (!self.database.contains(dep)) ErrMorphoPMUnrcgnzdPckg.throw("Package ${pkg.name} requires ${dep}")
-      if (stack.contains(dep)) ErrMorphoPMReqCycle.throw("${pkg.name} requires ${dep}, which is already being installed")
+      if (worklist.contains(dep)) ErrMorphoPMReqCycle.throw("${pkg.name} requires ${dep}, which is already being installed")
       if (self._isDev(dep)) continue // A dev checkout is the programmer's responsibility
 
       var constraint = VersionConstraint(pkg.requires[dep])
@@ -1009,13 +1068,13 @@ class MorphoPackageManager {
 
       if (!self.config.isInstalled(dep)) { // If not installed, install it
         print "Installing ${dep}, required by ${pkg.name}"
-        self._ensure(dep, stack, false)
+        self._ensure(dep, worklist, false)
       } else { // If installed, check if it satisfies the requirement
         var installed = Version(self.config[dep])
         if (!constraint.satisfied(installed)) {
           if (published.gt(installed)) { // If the published version is greater, upgrade it
             print "Upgrading ${dep} to version ${published.toString()}, required by ${pkg.name}"
-            self._ensure(dep, stack, true)
+            self._ensure(dep, worklist, true)
           } else ErrMorphoPMReq.throw("Package ${pkg.name} requires ${dep} ${constraint.toString()}, but version ${installed.toString()} is installed") // If the installed version is greater, throw an error
         }
       }
@@ -1023,7 +1082,6 @@ class MorphoPackageManager {
   }
 
   uninstall(name) {
-    self.loadDatabase()
     if (!self.config[name]) ErrMorphoPMNotInst.throw("Package ${name} is not installed")
     var users = self._requiredBy(name)
     if (users.count()>0) {
@@ -1047,14 +1105,46 @@ class MorphoPackageManager {
 
   _remove(name) {
     if (self.database.contains(name)) {
-      var pkg = self.database[name]
-      MorphoPackageInstaller(pkg, self.env, self.config.packagemanager).uninstall(self._packageLocation(name))
-      self.config.uninstall(pkg.name)
+      self._installerFor(name).uninstall(self._packageLocation(name))
+      self.config.uninstall(name)
     } else ErrMorphoPMUnrcgnzdPckg.throw()
   }
 
   _packageLocation(name) {
     return Folder.normalizePath("${packageFolder}/morpho-${name}")
+  }
+
+  _installerFor(name) {
+    var pkg = nil
+    if (self.database.contains(name)) pkg = self.database[name]
+    else pkg = MorphoPackage({ "name" : name })
+    return MorphoPackageInstaller(pkg, self.env, self.config.packagemanager)
+  }
+
+  pkgzip(name) { // Make a zip package from an installed package
+    var loc = self._requireInstalled(name)
+    if (!Folder.isFolder(loc)) ErrMorphoPMNotInst.throw("Package ${name} is not installed")
+    var version = self.config[name]
+    var zippath = Folder.normalizePath("${packageFolder}/${name}_v${version}_${System.platform()}_morphopm.zip")
+    self._installerFor(name).zipInstalled(loc, zippath)
+    print "Created ${zippath}"
+  }
+
+  pkginstall(filename) { // Install a zip package without building
+    var path = _absPath(filename)
+    if (!File.isFile(path)) ErrMorphoPMZipFile.throw("Couldn't find package file ${path}")
+
+    var info = _parsePkgArchiveName(path)
+    var name = info["name"], version = info["version"]
+    if (!self.database.contains(name)) ErrMorphoPMUnrcgnzdPckg.throw()
+    if (self._isDev(name)) {
+      ErrMorphoPMDevUp.warning("Package ${name} is a dev install; uninstall it before installing a package archive.")
+    } else if (self.config.isInstalled(name) && version!=_devMarker && Version(self.config[name]).gt(Version(version))) {
+      ErrMorphoPMAlrdy.throw("Package ${name} version ${self.config[name]} is already installed")
+    } else {
+      self._installerFor(name).install(self._packageLocation(name), zipfile=path)
+      self.config.install(name, version)
+    }
   }
 
   _requireInstalled(name) {
@@ -1081,22 +1171,19 @@ class MorphoPackageManager {
   }
 
   devinstall(name) {
-    self.loadDatabase()
     if (self.config[name]) {
       ErrMorphoPMAlrdy.warning("Package ${name} is already installed")
     } else if (self.database.contains(name)) {
       var loc = self._packageLocation(name)
       if (Folder.isFolder(loc)) ErrMorphoPMDev.throw("Package folder ${loc} already exists. Uninstall it before a dev install")
-      var stack = [ name ]
-      self._satisfyRequires(self.database[name], stack)
-      var pkg = self.database[name]
-      MorphoPackageInstaller(pkg, self.env, self.config.packagemanager).devinstall(loc)
-      self.config.install(pkg.name, _devMarker)
+      var worklist = [ name ]
+      self._satisfyRequires(self.database[name], worklist)
+      self._installerFor(name).devinstall(loc)
+      self.config.install(name, _devMarker)
     } else ErrMorphoPMUnrcgnzdPckg.throw()
   }
 
   upgrade(name) { 
-    self.loadDatabase()
     if (!self.database.contains(name)) ErrMorphoPMUnrcgnzdPckg.throw() 
 
     if (self._isDev(name)) {
@@ -1129,9 +1216,12 @@ class MorphoPackageManager {
       } else if (args[0]=="uninstall") {
         self._multi(self.uninstall, args) 
       } else if (args[0]=="upgrade") {
-        self._multi(self.upgrade, args) 
+        self._multi(self.upgrade, args)
+      } else if (args[0]=="_pkgzip") {
+        self._multi(self.pkgzip, args)
+      } else if (args[0]=="_pkginstall") {
+        self._multi(self.pkginstall, args) 
       } else if (args[0]=="list") {
-        self.loadDatabase()
         print "morphopm available packages: (${checkMark}=installed; ${upArrow}=upgrade available; ${devMark}=dev install)"
         self.database.list(config=self.config) 
       } else if (args[0]=="path") {
